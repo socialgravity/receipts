@@ -1,0 +1,1817 @@
+openapi: 3.1.0
+
+# SocialGravity Identity Licensing API, contract v1.
+#
+# THIS FILE DOCUMENTS WHAT IS LIVE. Every path below is a deployed Supabase edge function on
+# the identity project, reachable at the server URL, and was exercised against production
+# before being written down. CONTRACT.md describes a future gateway surface (`/v1/verify/:id`
+# and friends) that is NOT routed yet; where an operation has a planned gateway path it is
+# recorded as `x-contract-path` so the mapping is documented without claiming it exists.
+#
+# Sources of truth this file mirrors, in order of authority:
+#   supabase/functions/_shared/envelope.ts   the envelope and the closed error-code set
+#   supabase/functions/<name>/index.ts       the actual request and response of each operation
+#   src/contract/marketplace.ts              the shared types (frontend's source of truth)
+#   CONTRACT.md                              prose, endpoint tables, lifecycle
+#
+# scripts/check-openapi.ts fails if this file and envelope.ts disagree about the error codes
+# or the contract version, or if a path here has no matching function directory. Run it in CI.
+
+info:
+  title: SocialGravity Identity Licensing API
+  version: 1.0.0
+  summary: Licensed use of a real person's voice and face, with a per-use receipt anyone can check.
+  description: |
+    A licence in this API is a signed record. Verification is public and does not require
+    trusting SocialGravity: every signed response carries the company public key, the exact
+    canonical payload the signature was taken over, and the recipe for reproducing the bytes,
+    so a third party can check an Ed25519 signature offline.
+
+    ## The envelope
+    Every JSON response is the contract envelope and nothing else:
+
+        { "ok": true,  "contract_version": 1, "data": <T> }
+        { "ok": false, "contract_version": 1, "error": { "code": <ErrCode>, "message": "...", "field_errors": {...} } }
+
+    `error.code` is a closed set (see the `ErrCode` schema). `error.message` is plain and safe
+    to show a user. `field_errors` is present only when a specific field is at fault.
+    The one non-JSON response in this file is the generated audio from the metered TTS
+    endpoint, which returns `audio/wav` bytes with receipt headers.
+
+    ## Auth
+    Three mechanisms, all live:
+    - `licenseApiKey`: `Authorization: Bearer sgv_live_...`. A key belongs to exactly one
+      licence and is issued once, at delivery. This is what a brand's systems use.
+    - `operatorSecret`: `x-idl-admin-secret`. Stands in for talent-side and brand-side
+      dashboard sessions until Supabase Auth users exist (v0 of the platform). Not for
+      external callers.
+    - `webhookSecret`: a shared secret on the Docuseal callback only.
+    Public verification takes no auth at all, deliberately: a receipt nobody can check
+    without an account is not a receipt.
+
+    ## What is deliberately not published
+    Money terms never appear in any public response or any signed public payload. Per-output
+    channel, territory, placement and our own flags are committed to by hash
+    (`private_sha256`) and disclosed to the parties only. See docs/receipt-spec-v1.md.
+  contact:
+    name: SocialGravity
+    url: https://id.socialgravity.ai
+  x-contract-version: 1
+  x-status: |
+    Live surface as of 2026-07-30. There are no listed talent on the platform yet. One licence
+    covers a real person and a real voice sample (L24SQXLKQFC, first-party: the brand is us); the
+    rest are operator-created demo and synthetic records.
+
+servers:
+  - url: https://id.socialgravity.ai/functions/v1
+    description: Production, brand-facing hostname. Public verification lives here.
+  - url: https://qwvebejitvewvdowwpub.supabase.co/functions/v1
+    description: Same functions on the project hostname. Used by the verify scripts.
+
+tags:
+  - name: verify
+    description: Public verification of licences and per-output receipts. No auth.
+  - name: generation
+    description: Metered generation under a licence. Licence API key.
+  - name: register
+    description: Registration of published outputs, which is how a brand gets a credential.
+  - name: deal
+    description: The request lifecycle from submission to signature. Operator secret in v0.
+  - name: delivery
+    description: What a brand receives once a deal is complete.
+  - name: webhook
+    description: Provider callbacks. Not for external callers.
+
+paths:
+  /idl-verify:
+    get:
+      operationId: verify
+      tags: [verify]
+      summary: Verify a licence or a per-output receipt
+      description: |
+        Public, no auth. Pass exactly one of `id` (a licence) or `output` (a registered
+        output). `output` takes precedence when both are sent.
+
+        Either way the response carries a `signature` block: the algorithm, the key id, the
+        signature, the SPKI public key, the exact signed payload, its canonical JSON, and a
+        plain-language recipe. `self_check_passed` is our own re-verification, offered as a
+        convenience and worth nothing on its own; the point of publishing the payload and the
+        key is that you do not have to believe it. Check it yourself, or run
+        `verifier/verify.ts`.
+
+        Unknown ids are `not_found`. There is no stub response for an id we do not hold.
+      x-contract-path: GET /v1/verify/{licenseId} and GET /v1/verify/output/{outputId}
+      x-idl-error-codes: [validation_failed, not_found, internal]
+      security: []
+      parameters:
+        - name: id
+          in: query
+          required: false
+          description: Licence id, for example `L24SQXLKQFC`. Upper-cased server-side.
+          schema: { $ref: '#/components/schemas/LicenseId' }
+          example: L24SQXLKQFC
+        - name: output
+          in: query
+          required: false
+          description: Output id of a registered publication. Upper-cased server-side.
+          schema: { $ref: '#/components/schemas/OutputId' }
+      responses:
+        '200':
+          description: |
+            The licence receipt (when queried by `id`) or the output receipt (by `output`).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        oneOf:
+                          - $ref: '#/components/schemas/VerifyResponse'
+                          - $ref: '#/components/schemas/VerifyOutputResponse'
+              examples:
+                license:
+                  summary: Licence receipt, taken from the live record L24SQXLKQFC
+                  value:
+                    ok: true
+                    contract_version: 1
+                    data:
+                      license_id: L24SQXLKQFC
+                      status: active
+                      # A real person and a real voice sample, but the brand is us: this is a
+                      # first-party licence issued through the direct operator path, not an
+                      # arm's length deal. The record says so via issue_path.
+                      talent_display_name: Alvaro Balbin
+                      brand_name: SocialGravity
+                      assets: [voice]
+                      use_case: advertising
+                      media_channels: [paid_social, web]
+                      territories: worldwide
+                      effective_at: '2026-07-30T16:23:17.301Z'
+                      expires_at: '2027-07-30T16:23:17.301Z'
+                      contract_sha256: '254c88871a8523b7a9f3b3a86dd7f319e13c9863cab298a8ee5ee5f3984fe1a3'
+                      consent_on_record: true
+                      consent_evidence: { kind: platform_agreement }
+                      identity_method: document
+                      signature:
+                        algorithm: Ed25519
+                        company_key_id: idl-signing-v1
+                        sig_base64: '...'
+                        public_key_spki_b64: MCowBQYDK2VwAyEAXzTD6OwOCWzDk9K4zLoOeHSpGTO+b25SNUvkmqmqRE4=
+                        signed_payload: {}
+                        canonical_json: '{...}'
+                        recipe: 'Ed25519 signature over the canonical JSON ...'
+                        self_check_passed: true
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '405':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /idl-log-sth:
+    get:
+      operationId: treeHead
+      tags: [verify]
+      summary: Signed transparency-log tree head, and inclusion proofs
+      description: |
+        Public, no auth, read only. A signed Merkle tree head over the unified provenance ledger,
+        plus an inclusion proof for a record whose id you hold.
+
+        Why a Merkle tree when the ledger is already a hash chain: a chain proves an entry has not
+        moved only by walking every link between it and a signed head, which costs O(n) forever. A
+        tree proves it with log(n) hashes against one signed root, and the proof survives the log
+        growing. Construction is RFC 6962, the Certificate Transparency one.
+
+        Four shapes, decided by query parameter:
+        - no parameters: the signed head alone.
+        - `include=<licence or output id>`: head, that record's ledger entries with the exact
+          preimage each hash was taken over, and audit paths.
+        - `seq=<n>`: head and an inclusion proof for one ledger entry. Hashes only, no body: a
+          caller who has not named a record has not shown which record they are entitled to read.
+        - `leaves=1`: every entry hash in order, so you can recompute the root yourself instead of
+          trusting ours. This is the audit that does not require us to be honest.
+
+        Read only, and that is a boundary rather than an omission: persisted chain anchors are
+        written elsewhere and this endpoint only reports the newest one. Two writers to one chain
+        is how a chain forks.
+
+        What a signature here proves and does not prove is in the response: a signed head came
+        from us, and only an external timestamp on a head rules out back-dating. Full procedure:
+        docs/transparency-log-audit.md.
+      x-contract-path: none yet; candidate GET /v1/log/sth
+      x-idl-error-codes: [validation_failed, not_found, internal]
+      security: []
+      parameters:
+        - name: include
+          in: query
+          required: false
+          description: Licence id or output id. Upper-cased server-side.
+          schema: { type: string }
+        - name: seq
+          in: query
+          required: false
+          description: Ledger sequence number.
+          schema: { type: integer }
+        - name: leaves
+          in: query
+          required: false
+          description: Any truthy value returns the ordered entry hashes instead of a proof.
+          schema: { type: string }
+        - name: from
+          in: query
+          required: false
+          description: With `leaves`, the first sequence to return.
+          schema: { type: integer }
+        - name: to
+          in: query
+          required: false
+          description: With `leaves`, the last sequence to return.
+          schema: { type: integer }
+      responses:
+        '200':
+          description: |
+            The head, and a proof or leaf list when asked for. An empty tree is a valid answer:
+            `tree_size` 0 with the sha256 of no bytes as the root means the ledger holds no
+            entries, not that the log is broken.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        oneOf:
+                          - $ref: '#/components/schemas/TreeHeadResponse'
+                          - $ref: '#/components/schemas/LeavesResponse'
+        '400': { $ref: '#/components/responses/Error' }
+        '404':
+          description: No ledger entry at that sequence. Code `not_found`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '405': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-tts:
+    post:
+      operationId: generateSpeech
+      tags: [generation]
+      summary: Generate speech under a voice licence (metered)
+      description: |
+        The metered generation endpoint. Authenticate with the licence API key. Every
+        successful call writes a generation event carrying the voice asset version, the model,
+        a hash of the exact bytes returned, and the declared usage, and a database trigger
+        chains that event onto the licence's tamper-evident hash chain. There is no unmetered
+        path: if metering fails the audio is not delivered.
+
+        Two request shapes, decided by the licence, not by the caller. Resolve with
+        `resolveGenerationMode(scope)`; never read `scope.generation_mode` directly.
+        - `script_locked` (the default for every use case except `virtual_assistant` and
+          `games_interactive`): send `script_id` for a script the talent approved. Free `text`
+          is refused rather than ignored, because a caller sending text believes it will be
+          spoken.
+        - `open`: send `text`.
+
+        `usage` is required in both shapes. The licence names channels and territories that
+        cannot be observed in the audio, so the caller declares intended use per generation
+        and it is chained into the ledger. An out-of-scope declaration is refused before any
+        generation is paid for.
+
+        Response is `audio/wav` bytes.
+      x-contract-path: not part of the frontend contract; ID-API surface (CONTRACT.md, brand section)
+      x-idl-error-codes:
+        [unauthorized, validation_failed, scope_violates_terms, state_conflict, internal]
+      security:
+        - licenseApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TtsRequest' }
+            examples:
+              scriptLocked:
+                summary: Script-locked licence, the default
+                value:
+                  script_id: SCR7Y2K4QW
+                  usage: { media_channel: paid_social, territory: US }
+              open:
+                summary: Open licence (assistant or interactive use cases only)
+                value:
+                  text: Thanks for calling, I will be right with you.
+                  usage: { media_channel: in_app, territory: US }
+      responses:
+        '200':
+          description: |
+            Generated audio. The headers are the receipt: keep `x-idl-request-ref`, it is the
+            id of the generation event this audio came from and what `derived_from` refers to
+            at registration time.
+          headers:
+            x-idl-license:
+              description: The licence this audio was generated under.
+              schema: { $ref: '#/components/schemas/LicenseId' }
+            x-idl-request-ref:
+              description: |
+                Generation event id (UUID). The public output id for this generation and the
+                value to pass in `derived_from` when registering a published cut.
+              schema: { type: string, format: uuid }
+            x-idl-watermarked:
+              description: |
+                Version of the invisible watermark applied to these bytes. Disclosed on
+                purpose: a deterrent nobody is told about does not deter.
+              schema: { type: string }
+          content:
+            audio/wav:
+              schema: { type: string, format: binary }
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          description: |
+            Licence not in force, or the request is outside its scope. Codes:
+            `state_conflict` (revoked, suspended, outside the term window),
+            `scope_violates_terms` (licence does not cover voice, declared usage outside
+            scope, or free text on a script-locked licence).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '429':
+          description: Monthly character cap for this licence reached. Code `validation_failed`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '500':
+          $ref: '#/components/responses/Error'
+        '502':
+          description: Generation provider failed. Nothing is metered. Code `internal`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '503':
+          description: |
+            Watermark index unavailable, so the audio cannot be marked. Fails closed: no
+            audio is returned. Code `internal`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+
+  /idl-output-register:
+    post:
+      operationId: registerOutput
+      tags: [register]
+      summary: Register a published output and receive its content credential
+      description: |
+        The brand submits the hash of the exact published file and gets back a signed
+        credential plus a public verify URL. Voice as well as face: the meter records what we
+        generated, not what the brand published, and a published cut is routinely trimmed,
+        mixed and re-encoded, so it has different bytes and a different hash.
+
+        Two properties worth stating plainly because they are easy to "tidy up" later and the
+        clause depends on both:
+        - Registration NEVER refuses. Late, out-of-scope, post-expiry and inactive-licence
+          filings are all recorded, and flagged. A flag is our reading of the record, not the
+          record, and marking is not a determination of breach. Flags are never published on
+          the public verify page.
+        - Registration is not approval and does not extend the licence scope or term. The
+          response says so in `note`, because a brand that reads it as approval will be told
+          otherwise at the worst possible moment.
+
+        Idempotent on (licence, output hash): the same bytes twice is one entry.
+
+        Auth is either the licence API key or the operator secret. With a key, `license_id` is
+        optional and sending a different one than the key belongs to is a `forbidden`, never a
+        silent reassignment. With the operator secret, `license_id` is required.
+      x-contract-path: POST /v1/brand/outputs/register
+      x-idl-error-codes: [unauthorized, forbidden, validation_failed, not_found, internal]
+      security:
+        - licenseApiKey: []
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OutputRegistrationRequest' }
+            example:
+              output_sha256: 3b1f2c9e8a7d6b5c4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d
+              media_kind: audio
+              model: sonic-3
+              media_channel: paid_social
+              territory: US
+              published_at: '2026-07-29T09:00:00.000Z'
+              placement: Q3 launch, YouTube pre-roll
+              derived_from: ['b6f2d0e4-6c1a-4f2e-9d33-7a1c5e8b90aa']
+      responses:
+        '201':
+          description: Registered. The credential is signed and immediately publicly verifiable.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/OutputCredentialPrivate' }
+        '200':
+          description: |
+            Already registered under this licence with these exact bytes. The original entry
+            is returned unchanged, including its original `registered_at`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/OutputCredentialPrivate' }
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          description: This API key does not belong to that licence. Code `forbidden`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /idl-request-create:
+    post:
+      operationId: createRequest
+      tags: [deal]
+      summary: Submit a licence request against a listing
+      description: |
+        Brand side, first step of the deal. The server re-validates the requested scope
+        against the talent's standing terms with `scopeWithinTerms` and against the platform
+        pricing floor; it does not trust a client-side check. An agency sets
+        `requested_by_org_id` to itself and needs an in-force mandate for that client.
+
+        Requests are only possible against a `private` or `listed` listing that has creator
+        terms set. The brand org must have passed KYB.
+      x-contract-path: POST /v1/brand/requests
+      x-idl-error-codes:
+        [unauthorized, validation_failed, not_found, state_conflict, kyb_required,
+         authority_required, scope_violates_terms, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRequestBody' }
+      responses:
+        '201':
+          description: Request created in `submitted`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/LicenseRequest' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403':
+          description: |
+            `kyb_required` when the brand org is not verified, `authority_required` when an
+            agency has no in-force mandate for the client.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422':
+          description: Requested scope is outside the talent's standing terms. Code `scope_violates_terms`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-request-respond:
+    post:
+      operationId: respondToRequest
+      tags: [deal]
+      summary: Talent side answers a submitted request
+      description: |
+        Accept, decline or counter. The answer is attributed to a specific rights holder, who
+        must hold the capability to approve for this person: a manager, agent, loan-out or
+        estate is the normal counterparty, not an exception. A counter replaces scope and
+        pricing wholesale and is re-validated against standing terms.
+      x-contract-path: POST /v1/me/requests/{id}/approve, /decline, /counter
+      x-idl-error-codes:
+        [unauthorized, validation_failed, not_found, state_conflict, authority_required,
+         scope_violates_terms, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RespondRequestBody' }
+      responses:
+        '200':
+          description: The updated request, plus which rights holder answered.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/LicenseRequest'
+                          - type: object
+                            required: [answered_by]
+                            properties:
+                              answered_by:
+                                type: object
+                                required: [rights_holder_id, name]
+                                properties:
+                                  rights_holder_id: { type: string, format: uuid }
+                                  name: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-request-act:
+    post:
+      operationId: actOnRequest
+      tags: [deal]
+      summary: Brand side accepts a counter, counters back, or cancels
+      description: |
+        Brand-side moves on a live request. `accept` and `counter` are legal only from
+        `countered`; `cancel` is pre-activation only. A counter replaces scope and pricing
+        wholesale and is re-validated, same as the talent side.
+      x-contract-path: POST /v1/brand/requests/{id}/accept-counter, /cancel
+      x-idl-error-codes:
+        [unauthorized, validation_failed, not_found, state_conflict, scope_violates_terms, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActOnRequestBody' }
+      responses:
+        '200':
+          description: The updated request.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/LicenseRequest' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-sign-start:
+    post:
+      operationId: startSigning
+      tags: [deal]
+      summary: Build the licence instrument and open a signing session
+      description: |
+        Opens signing on an `accepted` request that already has rights-holder approval. In one
+        call it builds the licence text from the agreed scope, hashes the exact bytes, stores
+        them, and opens a provider signing session for both parties against THAT document.
+
+        The document hash always comes from our own envelope, never from a provider callback.
+        Both parties sign the same bytes: a second signature whose `document_sha256` differs
+        from the first is rejected.
+
+        Refuses with `consent_required` when an asset is in scope but the person has no
+        confirmed asset of that kind. Enrolling is not confirming, and a deal cannot be signed
+        over a likeness nobody said yes to.
+      x-contract-path: POST /v1/brand/requests/{id}/sign/session
+      x-idl-error-codes:
+        [unauthorized, validation_failed, not_found, state_conflict, authority_required,
+         consent_required, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignStartBody' }
+      responses:
+        '201':
+          description: Signing session open. Signatures arrive by webhook or via reconcile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/SignStartResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '502':
+          description: Signing provider error. Nothing is recorded. Code `internal`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+
+  /idl-request-sign:
+    post:
+      operationId: recordSignature
+      tags: [deal]
+      summary: Record one party's signature against the deal
+      description: |
+        Records a signature for the talent side or the brand side. The talent signature is
+        attributed to a rights holder with signing capability. Both signatures must carry the
+        same `document_sha256`, which is what makes "both parties signed the same instrument"
+        checkable later rather than assumed.
+
+        This records a signature; it does not create one. For a real e-signature flow call
+        `startSigning` first and let the webhook or reconcile write through this path.
+      x-contract-path: part of POST /v1/brand/requests/{id}/sign/session flow
+      x-idl-error-codes:
+        [unauthorized, validation_failed, not_found, state_conflict, authority_required, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordSignatureBody' }
+      responses:
+        '201':
+          description: Signature recorded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/RecordSignatureResult' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403':
+          description: |
+            `authority_required` when the deal has no rights-holder approval or the named
+            holder may not sign.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409':
+          description: This side has already signed, or the request is not in a signing state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-sign-reconcile:
+    post:
+      operationId: reconcileSignatures
+      tags: [deal]
+      summary: Pull signature state from the provider for every open envelope
+      description: |
+        The webhook is the fast path; this is the correct one. It walks open signing envelopes,
+        asks the provider what actually happened, and writes any missing signature through the
+        same recorder the webhook uses, so a dropped callback cannot leave a signed deal
+        looking unsigned. Safe to run on a schedule and safe to run twice.
+      x-contract-path: none (operational)
+      x-idl-error-codes: [unauthorized, validation_failed, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                request_id:
+                  type: string
+                  format: uuid
+                  description: Reconcile one deal only. Omit to sweep every open envelope.
+      responses:
+        '200':
+          description: What was found and what was written.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: object
+                        required: [envelopes, recorded, results]
+                        properties:
+                          envelopes: { type: integer, description: Open envelopes examined. }
+                          recorded: { type: integer, description: Signatures newly written. }
+                          results:
+                            type: array
+                            items: { type: object, additionalProperties: true }
+                          note: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+        '405': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-delivery-get:
+    post:
+      operationId: getDelivery
+      tags: [delivery]
+      summary: Deliver what the brand licensed (voice API key or face pack)
+      description: |
+        Re-checks the whole deal gate on every call, so it can refuse an existing licence:
+        `signature_required` when both parties have not signed, `payment_required` when no
+        payment is secured, `state_conflict` on an out-of-term licence. A licence row existing
+        is not the same as a licence being deliverable.
+
+        `asset: "voice"` returns the metered API key. The secret is shown exactly once, at
+        issue; afterwards only its prefix is returned and `api_key` is null. Pass
+        `rotate: true` to revoke the active key and mint a new one.
+
+        `asset: "face"` returns a short-lived signed URL for the stamped reference pack and,
+        when one exists, the signed contract PDF. Re-request for a fresh URL.
+      x-contract-path: GET /v1/brand/licenses/{id}/delivery
+      x-idl-error-codes:
+        [unauthorized, validation_failed, not_found, state_conflict, scope_violates_terms,
+         signature_required, payment_required, internal]
+      security:
+        - operatorSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeliveryRequestBody' }
+      responses:
+        '200':
+          description: |
+            Voice delivery for an already-issued key (secret withheld), or face delivery.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        oneOf:
+                          - $ref: '#/components/schemas/VoiceDelivery'
+                          - $ref: '#/components/schemas/FaceDelivery'
+        '201':
+          description: A new voice API key was minted. `api_key` is present here and nowhere else, ever.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOkBase'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data: { $ref: '#/components/schemas/VoiceDelivery' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403':
+          description: |
+            The deal gate refused: `signature_required`, `payment_required`, or
+            `scope_violates_terms` when the licence does not cover the asset asked for.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiErr' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+
+  /idl-docuseal-webhook:
+    post:
+      operationId: docusealWebhook
+      tags: [webhook]
+      summary: Signing provider callback
+      description: |
+        Provider to platform only. Authenticated by a shared secret in the `s` query parameter
+        or the `x-idl-webhook-secret` header, compared in constant time. The signature it
+        records is always hashed against the document WE stored and hashed, never against a
+        hash taken from the callback body, so a compromised or confused callback cannot
+        re-point a deal at different bytes. Documented for completeness; do not call it.
+
+        THIS IS THE ONE OPERATION THAT DOES NOT RETURN THE CONTRACT ENVELOPE. It answers
+        `{ ok, note }` with no `contract_version` and no `error.code`, because its only reader
+        is a provider retry loop that cares about the status code: 200 means stop retrying
+        (handled, or irrelevant, or a body we could not parse), 500 means retry. Written down
+        rather than tidied up, because a spec that claimed the envelope here would be wrong on
+        the first callback anyone inspected. Not worth changing for its own sake, but if this
+        endpoint ever grows a second reader it should move onto the envelope.
+      x-contract-path: none (provider callback)
+      x-idl-envelope: false
+      x-idl-error-codes: []
+      security:
+        - webhookSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Provider event body. Shape is the provider's, not ours.
+      responses:
+        '200':
+          description: |
+            Stop retrying. Covers handled, deliberately ignored, and unparseable-body cases;
+            `note` says which.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookAck' }
+        '401':
+          description: Bad or missing shared secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookAck' }
+        '405':
+          description: Not a POST.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookAck' }
+        '500':
+          description: Retryable failure on our side. The provider should send it again.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookAck' }
+
+components:
+  securitySchemes:
+    licenseApiKey:
+      type: http
+      scheme: bearer
+      description: |
+        `Authorization: Bearer sgv_live_...`. Scoped to exactly one licence. Issued once by
+        the delivery endpoint; we store only its sha256, so a lost key is rotated, never
+        recovered.
+    operatorSecret:
+      type: apiKey
+      in: header
+      name: x-idl-admin-secret
+      description: |
+        Platform operator secret, standing in for talent-side and brand-side dashboard
+        sessions until Supabase Auth users exist. Never issued to a brand.
+    webhookSecret:
+      type: apiKey
+      in: query
+      name: s
+      description: Shared secret for the signing-provider callback. Also accepted as `x-idl-webhook-secret`.
+
+  responses:
+    Error:
+      description: |
+        The error envelope. The HTTP status and `error.code` are chosen together; read the
+        code, not the status, when branching.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiErr' }
+
+  schemas:
+    # ---------------------------------------------------------------------------
+    # Envelope. Mirrors supabase/functions/_shared/envelope.ts exactly.
+    # ---------------------------------------------------------------------------
+    ErrCode:
+      type: string
+      description: |
+        The closed set of error codes. Additions are a contract change. The agency-first codes
+        are distinct from `state_conflict` because a caller renders a different thing for
+        each: get a yes, get a signature, take a payment.
+      enum:
+        - unauthorized
+        - forbidden
+        - not_found
+        - validation_failed
+        - scope_violates_terms
+        - kyb_required
+        - state_conflict
+        - payment_failed
+        - consent_required
+        - authority_required
+        - signature_required
+        - payment_required
+        - internal
+
+    ApiOkBase:
+      type: object
+      required: [ok, contract_version]
+      properties:
+        ok: { type: boolean, const: true }
+        contract_version: { type: integer, const: 1 }
+
+    ApiErr:
+      type: object
+      required: [ok, contract_version, error]
+      additionalProperties: false
+      properties:
+        ok: { type: boolean, const: false }
+        contract_version: { type: integer, const: 1 }
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code: { $ref: '#/components/schemas/ErrCode' }
+            message:
+              type: string
+              description: Plain and user-showable. No em dashes, no scores.
+            field_errors:
+              type: object
+              additionalProperties: { type: string }
+              description: Present only when specific fields are at fault.
+
+    # ---------------------------------------------------------------------------
+    # Primitives
+    # ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Transparency log
+    # ---------------------------------------------------------------------------
+    SignedTreeHead:
+      type: object
+      description: |
+        A Merkle tree head over the ledger, signed with the same key that signs licences. The
+        payload carries a constant `statement` of `transparency_log_tree_head`, which is what
+        stops a head from ever being readable as a licence, a credential or a chain anchor under
+        that key.
+      required: [tree_size, root_hash, signed_at, signature]
+      properties:
+        tree_size:
+          type: string
+          pattern: '^[0-9]+$'
+          description: |
+            Decimal string, deliberately. JSON numbers are where a canonical encoding stops being
+            canonical, since a verifier in another language has to agree on integer rendering.
+        root_hash:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: |
+            RFC 6962 root. Leaves are sha256(0x00 || entry_hash), nodes sha256(0x01 || left ||
+            right), subtrees split at the largest power of two below their size. An empty tree is
+            the sha256 of no bytes.
+        signed_at: { $ref: '#/components/schemas/Timestamp' }
+        signature: { $ref: '#/components/schemas/SignatureBlock' }
+        anchor:
+          type: [object, 'null']
+          description: |
+            The newest persisted chain anchor, reported not written. Null when none exists, in
+            which case the head's signature proves origin but not that the tree had this size on
+            the date it carries.
+          additionalProperties: true
+          properties:
+            method: { type: string, enum: [rfc3161, opentimestamps] }
+            anchored_at: { $ref: '#/components/schemas/Timestamp' }
+            head_seq: { type: string }
+            head_hash: { $ref: '#/components/schemas/Sha256Hex' }
+        anchor_note:
+          type: string
+          description: Which of those two cases you are in, in plain words.
+
+    InclusionProof:
+      type: object
+      required: [leaf_index, entry_hash, audit_path]
+      properties:
+        leaf_index: { type: string, pattern: '^[0-9]+$' }
+        seq: { type: string, description: Ledger sequence number of the entry. }
+        entry_hash: { $ref: '#/components/schemas/Sha256Hex' }
+        preimage:
+          type: string
+          description: |
+            The exact string the entry hash was taken over. Published so checking an entry is
+            sha256 of this string and needs no reimplementation of the ledger's hashing rules.
+        audit_path:
+          type: array
+          items: { $ref: '#/components/schemas/Sha256Hex' }
+          description: Sibling hashes ordered leaf-first, per RFC 6962.
+
+    TreeHeadResponse:
+      type: object
+      required: [sth]
+      properties:
+        sth: { $ref: '#/components/schemas/SignedTreeHead' }
+        subject:
+          type: object
+          properties:
+            kind: { type: string, enum: [license, output] }
+            public_id: { type: string }
+        inclusion:
+          oneOf:
+            - $ref: '#/components/schemas/InclusionProof'
+            - type: 'null'
+          description: |
+            Proof for the record's first (creation) entry, which is the one a receipt wants
+            pinned. Null when the log holds no entry for this record, which is expected for
+            anything created before the log began and is NOT evidence against the record.
+        inclusions:
+          type: array
+          items: { $ref: '#/components/schemas/InclusionProof' }
+          description: Every entry of this record, so a later revocation is provable too.
+        entries:
+          type: array
+          description: |
+            The record's ledger entries with their published preimages. Bodies carry hashes, ids,
+            enums and timestamps only: never biometrics, KYC documents, money terms or a media
+            placement.
+          items:
+            type: object
+            properties:
+              seq: { type: string }
+              at: { $ref: '#/components/schemas/Timestamp' }
+              event_type: { type: string }
+              body: { type: object, additionalProperties: true }
+              prev_hash: { type: string }
+              entry_hash: { $ref: '#/components/schemas/Sha256Hex' }
+              preimage: { type: string }
+        note: { type: string }
+
+    LeavesResponse:
+      type: object
+      description: |
+        Every entry hash in ledger order, hash-only. Publishing the full list is what lets an
+        auditor recompute the root rather than trust the signed one. It discloses the SIZE of the
+        ledger, which every transparency log discloses by construction.
+      required: [tree_size, leaves]
+      properties:
+        tree_size: { type: string, pattern: '^[0-9]+$' }
+        from: { type: string }
+        count: { type: string }
+        leaves:
+          type: array
+          items:
+            type: object
+            required: [seq, entry_hash]
+            properties:
+              seq: { type: string }
+              entry_hash: { $ref: '#/components/schemas/Sha256Hex' }
+        note: { type: string }
+
+    WebhookAck:
+      type: object
+      description: |
+        Provider-callback reply. Deliberately NOT the contract envelope: see the operation
+        description. `ok` is advisory; the provider branches on the HTTP status.
+      required: [ok, note]
+      properties:
+        ok: { type: boolean }
+        note: { type: string, description: What we did, in plain words, for the log. }
+        envelope_id: { type: string, format: uuid }
+
+    LicenseId:
+      type: string
+      pattern: '^[A-Z0-9]{8,16}$'
+      description: Short, upper-case, URL-safe licence id. Case-normalized server-side.
+      example: L24SQXLKQFC
+
+    OutputId:
+      type: string
+      pattern: '^[A-Z0-9]{8,16}$'
+      description: Short, upper-case, URL-safe id of a registered output.
+
+    Sha256Hex:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+      description: Lower-case hex SHA-256.
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: |
+        ISO 8601. Every timestamp inside a SIGNED payload is normalized to JavaScript
+        `Date.toISOString()`, meaning millisecond precision and a `Z` suffix. Reproduce that
+        exactly when recomputing canonical bytes.
+
+    AssetType:
+      type: string
+      enum: [voice, face]
+
+    UseCase:
+      type: string
+      enum:
+        - advertising
+        - brand_content
+        - entertainment
+        - games_interactive
+        - corporate_internal
+        - education_training
+        - virtual_assistant
+
+    MediaChannel:
+      type: string
+      enum:
+        - paid_social
+        - organic_social
+        - tv_ctv
+        - web
+        - audio_streaming
+        - ooh_dooh
+        - in_app
+        - print
+
+    MediaFormat:
+      type: string
+      description: The shape of the finished content, distinct from the channel it runs on.
+      enum:
+        - audio_spot
+        - voice_over
+        - video_ad
+        - social_clip
+        - longform_video
+        - still_image
+        - print_still
+        - interactive_agent
+
+    Territory:
+      description: '`worldwide`, or a list of ISO 3166-1 alpha-2 codes. Never both.'
+      oneOf:
+        - type: string
+          const: worldwide
+        - type: array
+          items: { type: string, minLength: 2, maxLength: 2 }
+          minItems: 1
+
+    Exclusivity:
+      oneOf:
+        - type: object
+          required: [kind]
+          additionalProperties: false
+          properties:
+            kind: { type: string, const: none }
+        - type: object
+          required: [kind, category]
+          additionalProperties: false
+          properties:
+            kind: { type: string, const: category }
+            category: { type: string, example: athletic footwear }
+        - type: object
+          required: [kind]
+          additionalProperties: false
+          properties:
+            kind: { type: string, const: full }
+
+    PostExpiryTerms:
+      type: object
+      description: |
+        What happens to content that already exists when the term ends. Expiry is a mechanism
+        and only ever stops future generation; everything here is contract, negotiated per
+        deal. Kept as its own object so nobody reads "expired" as "the ads come down", which
+        are different promises.
+      required:
+        [existing_content, sell_off_days, archive_rights, takedown_response_days, resale_or_transfer]
+      properties:
+        existing_content: { type: string, enum: [may_remain, must_be_removed] }
+        sell_off_days:
+          type: integer
+          description: Grace window for in-flight paid media. Platform default is 30.
+        archive_rights:
+          type: boolean
+          description: Whether the brand may retain internal, non-published archive copies.
+        takedown_response_days: { type: integer }
+        resale_or_transfer: { type: string, enum: [prohibited, with_consent] }
+
+    GenerationMode:
+      type: string
+      enum: [script_locked, open]
+
+    LicenseScope:
+      type: object
+      description: |
+        The full scope of one deal, immutable once the licence activates. `generation_mode`
+        and the fields below it are optional on the wire because they were added after the
+        first licences were signed; resolve the mode with `resolveGenerationMode(scope)` and
+        never read the field directly.
+      required:
+        [assets, use_case, media_channels, territories, term_months, starts_at, exclusivity,
+         campaign_description]
+      properties:
+        assets:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/AssetType' }
+        use_case:
+          allOf: [{ $ref: '#/components/schemas/UseCase' }]
+          description: Exactly one. A second use case is a second licence.
+        media_channels:
+          type: array
+          items: { $ref: '#/components/schemas/MediaChannel' }
+        territories: { $ref: '#/components/schemas/Territory' }
+        term_months:
+          type: integer
+          const: 12
+          description: Face is always 12. Voice is a 12-month master, metered monthly.
+        starts_at: { type: string, description: ISO 8601 date. }
+        exclusivity: { $ref: '#/components/schemas/Exclusivity' }
+        campaign_description:
+          type: string
+          description: The brand's own description of what the likeness will appear in.
+        generation_mode: { $ref: '#/components/schemas/GenerationMode' }
+        formats:
+          type: array
+          items: { $ref: '#/components/schemas/MediaFormat' }
+        languages:
+          type: array
+          items: { type: string, description: BCP-47 tag. }
+        post_expiry: { $ref: '#/components/schemas/PostExpiryTerms' }
+
+    DealPricing:
+      type: object
+      description: |
+        Money. Never appears in a public response, never inside a signed public payload.
+        Present here only because the request endpoints take it.
+      properties:
+        face:
+          type: object
+          required: [license_fee_usd, renewal]
+          properties:
+            license_fee_usd: { type: number }
+            renewal: { type: string, enum: [renegotiate, same_terms] }
+        voice:
+          type: object
+          required: [rate_per_1k_chars_usd]
+          properties:
+            rate_per_1k_chars_usd: { type: number }
+            monthly_minimum_usd: { type: number }
+
+    AssetFingerprint:
+      type: object
+      description: |
+        A versioned, fingerprinted identity asset. Re-enrollment mints a new version and never
+        mutates an old one, which is what makes "which exact voice said this" answerable
+        forever.
+      required: [asset_type, sha256, version, created_at]
+      properties:
+        asset_type: { $ref: '#/components/schemas/AssetType' }
+        sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: Voice = enrollment sample. Face = canonical pack manifest.
+        version: { type: integer, minimum: 1, description: Monotonic per talent per asset type. }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    SignatureBlock:
+      type: object
+      description: |
+        Everything needed to check the signature without trusting us. `signed_payload` is the
+        exact object, `canonical_json` is the exact bytes, `recipe` says how those bytes were
+        derived, and `public_key_spki_b64` is the key. `self_check_passed` is our own
+        re-verification and proves nothing on its own.
+      required: [algorithm, company_key_id, sig_base64]
+      properties:
+        algorithm: { type: string, const: Ed25519 }
+        company_key_id:
+          type: string
+          description: Key id. Rotations append and ids are never reused.
+          example: idl-signing-v1
+        sig_base64: { type: string, description: Base64 Ed25519 signature. }
+        public_key_spki_b64:
+          type: [string, 'null']
+          description: SPKI public key, base64. Null if we do not publish that key id.
+        signed_payload: { type: object, additionalProperties: true }
+        canonical_json:
+          type: string
+          description: |
+            Canonical JSON of `signed_payload`: object keys sorted bytewise at every level,
+            array order preserved, no whitespace, undefined-valued keys dropped.
+        recipe: { type: string, description: Plain-language reproduction instructions. }
+        self_check_passed: { type: boolean }
+
+    # ---------------------------------------------------------------------------
+    # Public receipts. See docs/receipt-spec-v1.md for the full five-link chain.
+    # ---------------------------------------------------------------------------
+    VerifyResponse:
+      type: object
+      description: |
+        The public licence receipt. No pricing and no brand contact details, ever. Optional
+        fields are omitted rather than nulled when absent, and that is load-bearing: a licence
+        signed before a field existed must keep verifying against the exact bytes it was
+        signed with.
+      required:
+        [license_id, status, talent_display_name, brand_name, assets, use_case, media_channels,
+         territories, effective_at, expires_at, contract_sha256, consent_on_record, signature]
+      properties:
+        license_id: { $ref: '#/components/schemas/LicenseId' }
+        status: { type: string, enum: [active, expired, revoked, suspended] }
+        talent_display_name: { type: string }
+        brand_name: { type: string }
+        assets:
+          type: array
+          items: { $ref: '#/components/schemas/AssetType' }
+        use_case: { $ref: '#/components/schemas/UseCase' }
+        media_channels:
+          type: array
+          items: { $ref: '#/components/schemas/MediaChannel' }
+        territories: { $ref: '#/components/schemas/Territory' }
+        effective_at: { $ref: '#/components/schemas/Timestamp' }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+        contract_sha256: { $ref: '#/components/schemas/Sha256Hex' }
+        asset_pack_sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: Present when the licence covers a face pack.
+        assets_licensed:
+          type: array
+          items: { $ref: '#/components/schemas/AssetFingerprint' }
+          description: Exact asset versions licensed. Provenance link 2 to link 3.
+        agency_name:
+          type: [string, 'null']
+          description: |
+            The agency that transacted, when there was one. Published because a checker asking
+            "who used this" needs both parties named, not just the brand on the schedule.
+        post_expiry: { $ref: '#/components/schemas/PostExpiryTerms' }
+        consent_on_record:
+          type: boolean
+          const: true
+          description: |
+            A licence cannot issue without consent evidence behind it. Read `consent_evidence`
+            for what that evidence actually is rather than taking this flag on faith.
+        consent_evidence:
+          type: object
+          description: |
+            Which artifact establishes that this person authorised licensing. Neither artifact is
+            published; its hash is inside the signature, so it cannot be swapped after issue.
+            Absent on licences issued before 2026-07-30, which carry only a recording hash inside
+            the signed payload. Absent means no claim, never a default.
+          required: [kind, sha256]
+          properties:
+            kind:
+              type: string
+              enum: [consent_video, platform_agreement]
+              description: |
+                `consent_video` is a scripted recording in which the person states their name, the
+                date and what they authorised. `platform_agreement` is the agreement they signed.
+                A signed instrument is what a dispute turns on; a recording additionally shows a
+                live human at a stated moment, which matters most for someone with no document
+                check behind them. `identity_method` tells those cases apart.
+            sha256: { $ref: '#/components/schemas/Sha256Hex' }
+            description: { type: string }
+        identity_method:
+          type: string
+          enum: [document, video_attestation]
+          description: |
+            Which check stood behind the person named on this licence AT ISSUE. `document` =
+            a government ID was verified. `video_attestation` = the person stated their legal
+            name and the date on camera and a named operator confirmed it, with no government
+            document checked. Absent means the licence predates the field and no claim is made
+            either way, which is why it is omitted rather than defaulted. Signed on purpose: a
+            receipt that hid the difference would be worth less than no receipt.
+        signature: { $ref: '#/components/schemas/SignatureBlock' }
+
+    OutputCredentialPublic:
+      type: object
+      description: |
+        The public half of a registered publication. Withholds media channel, territory,
+        placement, `derived_from` and our flags: those are committed to by `private_sha256`
+        and disclosed to the parties only. Publishing which channel one specific ad ran in
+        hands competitors a media plan, and publishing a flag would be exactly the public
+        accusation we promise not to make.
+      required:
+        [output_id, license_id, talent_display_name, brand_name, output_sha256, captured,
+         registered_at, license_active_at_publication, license_term_basis, signature, verify_url]
+      properties:
+        output_id: { $ref: '#/components/schemas/OutputId' }
+        license_id: { $ref: '#/components/schemas/LicenseId' }
+        talent_display_name: { type: string }
+        brand_name: { type: string }
+        output_sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: Hash of the exact published file. This is what a checker compares against.
+        media_kind: { type: string, enum: [image, video, audio] }
+        model: { type: string, description: Brand-reported generating tool. }
+        captured:
+          type: string
+          const: registered
+          description: |
+            Constant, so a brand-reported record can never be mistaken for one we metered
+            ourselves.
+        published_at:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          description: Brand-stated first publication. Omitted when they stated none.
+        registered_at: { $ref: '#/components/schemas/Timestamp' }
+        assets_licensed:
+          type: array
+          items: { $ref: '#/components/schemas/AssetFingerprint' }
+        license_active_at_publication:
+          type: boolean
+          description: |
+            Whether the licence was in force at the moment used as the basis. Derivable from
+            the licence page already, so stating it adds no disclosure and saves a reviewer
+            the arithmetic.
+        license_term_basis:
+          type: string
+          enum: [published_at, registered_at]
+          description: |
+            Which moment the line above was computed against. Named rather than hidden,
+            because falling back to registration time changes what the answer means.
+        signature: { $ref: '#/components/schemas/SignatureBlock' }
+        verify_url: { type: string, format: uri }
+
+    OutputCredentialPrivate:
+      type: object
+      description: |
+        What the REGISTERING party gets back: the credential plus the private block itself, so
+        they can rehash it and confirm what we committed to. This is the only copy of that
+        block we hand out. The public surface serves the hash alone.
+      required:
+        [output_id, license_id, output_sha256, media_kind, model, captured, flags,
+         registered_at, private_block, private_sha256, signature, verify_url, note]
+      properties:
+        output_id: { $ref: '#/components/schemas/OutputId' }
+        license_id: { $ref: '#/components/schemas/LicenseId' }
+        output_sha256: { $ref: '#/components/schemas/Sha256Hex' }
+        media_kind: { type: string, enum: [image, video, audio] }
+        model: { type: string }
+        captured: { type: string, const: registered }
+        assets_licensed:
+          type: array
+          items: { $ref: '#/components/schemas/AssetFingerprint' }
+        flags:
+          type: array
+          items: { $ref: '#/components/schemas/RegistrationFlag' }
+          description: |
+            How this filing reads against its licence. Recorded and signed over, never used to
+            refuse a registration and never published. A flag is our reading of the record,
+            not the record, and marking is not a determination of breach.
+        registered_at: { $ref: '#/components/schemas/Timestamp' }
+        private_block: { $ref: '#/components/schemas/RegistrationPrivateBlock' }
+        private_sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: sha256 of the canonical JSON of `private_block`. Rehash it to check.
+        signature: { $ref: '#/components/schemas/SignatureBlock' }
+        verify_url: { type: string, format: uri }
+        record_hash:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: This row's link in the per-licence register hash chain.
+        note:
+          type: string
+          description: |
+            Says out loud that recording is not approval and does not extend scope or term.
+            Render it.
+
+    RegistrationFlag:
+      type: string
+      enum: [late, outside_scope, post_expiry, licence_not_active]
+
+    RegistrationPrivateBlock:
+      type: object
+      description: |
+        The withheld half of a registration, committed to by hash. Canonicalize exactly as
+        written here to reproduce `private_sha256`.
+      required: [flags]
+      properties:
+        media_channel: { type: string }
+        territory: { type: string }
+        placement: { type: string }
+        derived_from:
+          type: array
+          items: { type: string }
+        note: { type: string }
+        flags:
+          type: array
+          items: { $ref: '#/components/schemas/RegistrationFlag' }
+
+    VerifyOutputResponse:
+      type: object
+      required: [credential, license_status, consent_on_record]
+      properties:
+        credential: { $ref: '#/components/schemas/OutputCredentialPublic' }
+        license_status:
+          type: string
+          enum: [active, expired, revoked, suspended]
+          description: Status NOW, alongside active-at-publication on the credential.
+        consent_on_record: { type: boolean, const: true }
+        register_record_hash:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: |
+            Tamper evidence for the register itself: this row's link in the per-licence chain.
+            A row inserted later cannot claim an earlier position without breaking every hash
+            after it.
+        note: { type: string }
+
+    # ---------------------------------------------------------------------------
+    # Deal lifecycle
+    # ---------------------------------------------------------------------------
+    LicenseRequestStatus:
+      type: string
+      enum:
+        - draft
+        - submitted
+        - countered
+        - accepted
+        - signing
+        - payment_due
+        - active
+        - declined
+        - expired_unanswered
+        - cancelled
+
+    LicenseRequest:
+      type: object
+      required: [id, listing_id, brand_org_id, scope, pricing, status, history, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        listing_id: { type: string, format: uuid }
+        brand_org_id:
+          type: string
+          format: uuid
+          description: The brand that will hold the licence.
+        requested_by_org_id:
+          type: string
+          format: uuid
+          description: The org that submitted it. Equals `brand_org_id` on a direct request.
+        requested_by_kind: { type: string, enum: [brand, agency] }
+        scope: { $ref: '#/components/schemas/LicenseScope' }
+        pricing: { $ref: '#/components/schemas/DealPricing' }
+        status: { $ref: '#/components/schemas/LicenseRequestStatus' }
+        approved_by_rights_holder_id:
+          type: [string, 'null']
+          description: Which rights holder approved. Null until a talent-side accept lands.
+        signatures:
+          type: array
+          description: Both are required before a licence can issue, over the same document hash.
+          items:
+            type: object
+            required: [party, signed_at, document_sha256]
+            properties:
+              party: { type: string, enum: [talent, brand] }
+              signed_at: { $ref: '#/components/schemas/Timestamp' }
+              document_sha256: { $ref: '#/components/schemas/Sha256Hex' }
+        payment:
+          type: object
+          description: A licence cannot issue until one payment row is `secured`.
+          properties:
+            status: { type: string, enum: [none, pending, secured, failed] }
+            amount_usd: { type: number }
+        history:
+          type: array
+          description: Newest first. Counters replace scope and pricing wholesale, never patch.
+          items:
+            type: object
+            required: [at, by, action]
+            properties:
+              at: { $ref: '#/components/schemas/Timestamp' }
+              by: { type: string, enum: [brand, talent, platform] }
+              action: { type: string, enum: [submit, counter, accept, decline, cancel, expire] }
+              scope: { $ref: '#/components/schemas/LicenseScope' }
+              pricing: { $ref: '#/components/schemas/DealPricing' }
+              note: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+
+    CreateRequestBody:
+      type: object
+      required: [listing_id, brand_org_id, scope, pricing]
+      properties:
+        listing_id: { type: string, format: uuid }
+        brand_org_id: { type: string, format: uuid }
+        requested_by_org_id:
+          type: string
+          format: uuid
+          description: |
+            An agency sets this to itself and needs an in-force mandate for the brand, else
+            `authority_required`. Defaults to `brand_org_id`.
+        scope: { $ref: '#/components/schemas/LicenseScope' }
+        pricing: { $ref: '#/components/schemas/DealPricing' }
+
+    RespondRequestBody:
+      type: object
+      required: [request_id, action, rights_holder_id]
+      properties:
+        request_id: { type: string, format: uuid }
+        action: { type: string, enum: [accept, decline, counter] }
+        rights_holder_id:
+          type: string
+          format: uuid
+          description: Who is answering. Someone has to, and it is recorded.
+        scope:
+          allOf: [{ $ref: '#/components/schemas/LicenseScope' }]
+          description: Required on `counter`. Replaces the previous scope wholesale.
+        pricing:
+          allOf: [{ $ref: '#/components/schemas/DealPricing' }]
+          description: Required on `counter`.
+        note: { type: string }
+
+    ActOnRequestBody:
+      type: object
+      required: [request_id, action]
+      properties:
+        request_id: { type: string, format: uuid }
+        action: { type: string, enum: [accept, counter, cancel] }
+        scope:
+          allOf: [{ $ref: '#/components/schemas/LicenseScope' }]
+          description: Required on `counter`.
+        pricing:
+          allOf: [{ $ref: '#/components/schemas/DealPricing' }]
+          description: Required on `counter`.
+        note: { type: string }
+
+    SignStartBody:
+      type: object
+      required: [request_id, brand_signer_email, brand_signer_name, talent_rights_holder_id]
+      properties:
+        request_id: { type: string, format: uuid }
+        brand_signer_email: { type: string, format: email }
+        brand_signer_name: { type: string }
+        talent_rights_holder_id:
+          type: string
+          format: uuid
+          description: The rights holder who will sign for the person.
+        talent_signer_email: { type: string, format: email }
+        talent_signer_name: { type: string }
+
+    SignStartResult:
+      type: object
+      required:
+        [request_id, envelope_id, provider, provider_submission_id, document_sha256,
+         document_path, instrument_version, status, submitters]
+      properties:
+        request_id: { type: string, format: uuid }
+        envelope_id: { type: string, format: uuid }
+        provider: { type: string, const: docuseal }
+        provider_submission_id: { type: string }
+        document_sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: |
+            Hash of the instrument bytes WE built and stored, re-checked against the stored
+            body before the session opens. Never taken from the provider.
+        document_path: { type: string, description: Storage path of the stored instrument. }
+        instrument_version: { type: string }
+        status: { type: string, const: signing }
+        submitters:
+          type: array
+          items:
+            type: object
+            required: [role, email, signing_url]
+            properties:
+              role: { type: string }
+              email: { type: string, format: email }
+              signing_url: { type: [string, 'null'], format: uri }
+        next: { type: string }
+
+    RecordSignatureBody:
+      type: object
+      required: [request_id, party, signer_name, document_sha256]
+      properties:
+        request_id: { type: string, format: uuid }
+        party: { type: string, enum: [talent, brand] }
+        signer_name: { type: string }
+        signer_email: { type: string, format: email }
+        document_sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: |
+            Must equal the hash the first party signed. A different hash is rejected rather
+            than recorded, because "both parties signed the same instrument" is the claim the
+            licence rests on.
+        provider: { type: string, enum: [manual, docuseal], default: manual }
+        provider_ref: { type: string }
+        rights_holder_id:
+          type: string
+          format: uuid
+          description: Required when `party` is `talent`.
+        org_id:
+          type: string
+          format: uuid
+          description: Brand side only. Defaults to the requesting org on the deal.
+
+    RecordSignatureResult:
+      type: object
+      required: [request_id, party, signed_at, document_sha256, signatures_complete, status]
+      properties:
+        request_id: { type: string, format: uuid }
+        party: { type: string, enum: [talent, brand] }
+        signed_at: { $ref: '#/components/schemas/Timestamp' }
+        document_sha256: { $ref: '#/components/schemas/Sha256Hex' }
+        signatures_complete: { type: boolean }
+        status: { $ref: '#/components/schemas/LicenseRequestStatus' }
+        next: { type: string }
+
+    # ---------------------------------------------------------------------------
+    # Generation and delivery
+    # ---------------------------------------------------------------------------
+    UsageDeclaration:
+      type: object
+      description: |
+        Intended use for THIS generation. Required. The licence names channels and territories
+        that cannot be observed in the output, so the caller declares them per call and the
+        declaration is chained into the ledger. Outside scope is refused before generating.
+      required: [media_channel, territory]
+      properties:
+        media_channel: { $ref: '#/components/schemas/MediaChannel' }
+        territory:
+          type: string
+          description: ISO 3166-1 alpha-2, or `worldwide` when the licence is worldwide.
+
+    TtsRequest:
+      type: object
+      description: |
+        Send `script_id` on a script-locked licence, `text` on an open one. Sending free text
+        to a script-locked licence is refused, not ignored.
+      required: [usage]
+      properties:
+        script_id:
+          type: string
+          description: An approved script. Required on a script-locked licence.
+        text:
+          type: string
+          description: Free text. Accepted only on an open licence.
+        usage: { $ref: '#/components/schemas/UsageDeclaration' }
+
+    OutputRegistrationRequest:
+      type: object
+      required: [output_sha256, media_kind, model]
+      properties:
+        license_id:
+          allOf: [{ $ref: '#/components/schemas/LicenseId' }]
+          description: |
+            Optional when authenticating with that licence's API key. Required with the
+            operator secret. Sending one the key does not belong to is `forbidden`.
+        output_sha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256Hex' }]
+          description: Hash of the exact published file, computed client- or server-side.
+        media_kind: { type: string, enum: [image, video, audio] }
+        model: { type: string, description: What tool generated it. Brand-reported. }
+        media_channel: { $ref: '#/components/schemas/MediaChannel' }
+        territory: { type: string, description: ISO 3166-1 alpha-2. }
+        published_at:
+          allOf: [{ $ref: '#/components/schemas/Timestamp' }]
+          description: First publication, actual or intended.
+        placement: { type: string, description: Platform, campaign, flight, or URL. }
+        derived_from:
+          type: array
+          items: { type: string }
+          description: |
+            `x-idl-request-ref` values of the metered generations this file was cut from,
+            where there are any. This is the link that ties a published cut back to the exact
+            generation events behind it.
+        note: { type: string }
+
+    DeliveryRequestBody:
+      type: object
+      required: [license_id, asset]
+      properties:
+        license_id: { $ref: '#/components/schemas/LicenseId' }
+        asset: { $ref: '#/components/schemas/AssetType' }
+        rotate:
+          type: boolean
+          default: false
+          description: |
+            Voice only. Revokes the active key and mints a new one. The old key stops working
+            immediately.
+
+    VoiceDelivery:
+      type: object
+      required: [license_id, endpoint, api_key_prefix]
+      properties:
+        license_id: { $ref: '#/components/schemas/LicenseId' }
+        endpoint: { type: string, format: uri, description: The metered TTS endpoint. }
+        api_key_prefix:
+          type: string
+          description: Display prefix only, for example `sgv_live_ab12`.
+        api_key:
+          type: [string, 'null']
+          description: |
+            The secret, shown exactly once at issue. Null on every later call: we store only
+            its sha256, so it is rotatable but never recoverable.
+        issued_at: { $ref: '#/components/schemas/Timestamp' }
+        rotated: { type: boolean }
+        note: { type: string }
+
+    FaceDelivery:
+      type: object
+      required: [license_id, pack_download_url, pack_sha256, expires_in_seconds]
+      properties:
+        license_id: { $ref: '#/components/schemas/LicenseId' }
+        pack_download_url:
+          type: string
+          format: uri
+          description: Time-limited signed URL for the stamped reference pack.
+        pack_sha256: { $ref: '#/components/schemas/Sha256Hex' }
+        contract_pdf_url: { type: [string, 'null'], format: uri }
+        expires_in_seconds: { type: integer }

@@ -1,0 +1,97 @@
+{
+  "ok": true,
+  "contract_version": 1,
+  "data": {
+    "license_id": "LGVGMQAWVE2",
+    "status": "active",
+    "talent_display_name": "SYNTHETIC Talent bb0a95cc",
+    "brand_name": "SYNTHETIC Client Brand",
+    "assets": [
+      "voice"
+    ],
+    "use_case": "advertising",
+    "media_channels": [
+      "paid_social"
+    ],
+    "territories": [
+      "US"
+    ],
+    "effective_at": "2026-07-29T00:14:35.828Z",
+    "expires_at": "2027-07-29T00:14:35.828Z",
+    "contract_sha256": "94d62e67b467467eae0c81dcd71b0519d274a52f2f84077dab02381eba87da37",
+    "assets_licensed": [
+      {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": 1,
+        "asset_type": "voice",
+        "created_at": "2026-07-29T00:12:33.348Z"
+      }
+    ],
+    "agency_name": "SYNTHETIC Agency",
+    "post_expiry": {
+      "sell_off_days": 30,
+      "archive_rights": false,
+      "existing_content": "may_remain",
+      "resale_or_transfer": "prohibited",
+      "takedown_response_days": 14
+    },
+    "consent_on_record": true,
+    "signature": {
+      "algorithm": "Ed25519",
+      "company_key_id": "idl-signing-v1",
+      "sig_base64": "BYD7loPFre+tmTk1UGkhjx9rwifpwxx3JVStZlNoY1NjEsjeV/fvL7VVq7t8JzubXZOzSYx2EpTU0HM17KsPCg==",
+      "public_key_spki_b64": "MCowBQYDK2VwAyEAXzTD6OwOCWzDk9K4zLoOeHSpGTO+b25SNUvkmqmqRE4=",
+      "signed_payload": {
+        "license_id": "LGVGMQAWVE2",
+        "listing_id": "c70e44a3-87c6-4326-ac0e-262df24c3973",
+        "brand_org_id": "c5ef77d6-3b09-40fe-90c9-568c97784b2e",
+        "scope": {
+          "assets": [
+            "voice"
+          ],
+          "formats": [
+            "audio_spot"
+          ],
+          "use_case": "advertising",
+          "languages": [
+            "en-US"
+          ],
+          "starts_at": "2026-07-29T00:14:10.567Z",
+          "exclusivity": {
+            "kind": "none"
+          },
+          "post_expiry": {
+            "sell_off_days": 30,
+            "archive_rights": false,
+            "existing_content": "may_remain",
+            "resale_or_transfer": "prohibited",
+            "takedown_response_days": 14
+          },
+          "term_months": 12,
+          "territories": [
+            "US"
+          ],
+          "media_channels": [
+            "paid_social"
+          ],
+          "campaign_description": "SYNTHETIC verification run, no real campaign."
+        },
+        "contract_sha256": "94d62e67b467467eae0c81dcd71b0519d274a52f2f84077dab02381eba87da37",
+        "assets_licensed": [
+          {
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "version": 1,
+            "asset_type": "voice",
+            "created_at": "2026-07-29T00:12:33.348Z"
+          }
+        ],
+        "effective_at": "2026-07-29T00:14:35.828Z",
+        "expires_at": "2027-07-29T00:14:35.828Z",
+        "consent_video_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "canonical_json": "{\"assets_licensed\":[{\"asset_type\":\"voice\",\"created_at\":\"2026-07-29T00:12:33.348Z\",\"sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"version\":1}],\"brand_org_id\":\"c5ef77d6-3b09-40fe-90c9-568c97784b2e\",\"consent_video_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"contract_sha256\":\"94d62e67b467467eae0c81dcd71b0519d274a52f2f84077dab02381eba87da37\",\"effective_at\":\"2026-07-29T00:14:35.828Z\",\"expires_at\":\"2027-07-29T00:14:35.828Z\",\"license_id\":\"LGVGMQAWVE2\",\"listing_id\":\"c70e44a3-87c6-4326-ac0e-262df24c3973\",\"scope\":{\"assets\":[\"voice\"],\"campaign_description\":\"SYNTHETIC verification run, no real campaign.\",\"exclusivity\":{\"kind\":\"none\"},\"formats\":[\"audio_spot\"],\"languages\":[\"en-US\"],\"media_channels\":[\"paid_social\"],\"post_expiry\":{\"archive_rights\":false,\"existing_content\":\"may_remain\",\"resale_or_transfer\":\"prohibited\",\"sell_off_days\":30,\"takedown_response_days\":14},\"starts_at\":\"2026-07-29T00:14:10.567Z\",\"term_months\":12,\"territories\":[\"US\"],\"use_case\":\"advertising\"}}",
+      "recipe": "Ed25519 signature over the canonical JSON (object keys sorted lexicographically at every level, arrays in order, no whitespace, UTF-8 bytes) of {license_id, listing_id, brand_org_id, scope, contract_sha256, asset_pack_sha256?, assets_licensed?, identity_method?, effective_at, expires_at, consent_video_sha256}. asset_pack_sha256 is omitted when the license has no face pack. assets_licensed is the list of licensed asset fingerprints ({asset_type, sha256, version, created_at}, in the order stored on the record) and is omitted entirely when empty, which is why licenses issued before asset fingerprinting verify against the identical payload they were signed with. identity_method is 'document' or 'video_attestation', recording how the talent's identity was established at the moment of issue, and is likewise omitted entirely when the record predates the field. It is read from the license record and never re-derived, so a talent who verifies more strongly later does not change the bytes of an existing signature. Timestamps are normalized to JavaScript Date.toISOString() (millisecond precision, Z suffix). Verify with WebCrypto Ed25519 against the SPKI public key (base64) for the record's company_key_id.",
+      "self_check_passed": true
+    }
+  }
+}

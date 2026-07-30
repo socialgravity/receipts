@@ -1,0 +1,502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.socialgravity.ai/schemas/receipt-v1.schema.json",
+  "title": "SocialGravity identity licensing receipt, v1",
+  "description": "The five-link provenance chain for one licensed use of a real person's voice or face: person, versioned asset, licence, generation event, content credential. Prose spec: docs/receipt-spec-v1.md. This document is an ARCHIVABLE ASSEMBLY, not the response of a single endpoint: links 3 and 5 come from GET /idl-verify (by id and by output respectively) and verifier/verify.ts composes them. Compatibility rule throughout: optional fields are OMITTED, never null, because a record signed before a field existed must keep verifying against the exact bytes it was signed with. Treat absent as 'no claim made', never as a default.",
+  "type": "object",
+  "required": ["receipt_version", "person", "license"],
+  "additionalProperties": false,
+  "properties": {
+    "receipt_version": {
+      "const": "1",
+      "description": "Version of THIS document shape. Breaking changes mint '2' and a new schema file. Not a URL version."
+    },
+    "assembled_at": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this assembly was built. Provenance of the document, not of the licence, and outside every signature."
+    },
+    "person": {
+      "$ref": "#/$defs/personLink",
+      "description": "Link 1."
+    },
+    "assets": {
+      "type": "array",
+      "description": "Link 2. The asset versions the licence covers, in the order stored on the licence record. Omitted entirely when the licence carries none, which is the case for licences issued before asset fingerprinting.",
+      "items": { "$ref": "#/$defs/assetFingerprint" }
+    },
+    "license": {
+      "$ref": "#/$defs/licenseLink",
+      "description": "Link 3. The signed registry row and its signature block."
+    },
+    "generation": {
+      "$ref": "#/$defs/generationLink",
+      "description": "Link 4. One recorded use. Absent when the receipt is for a licence rather than a specific use."
+    },
+    "credential": {
+      "$ref": "#/$defs/credentialLink",
+      "description": "Link 5. The signed receipt for one output file."
+    },
+    "log": {
+      "$ref": "#/$defs/logInclusion",
+      "description": "Transparency-log inclusion for this receipt's ledger entries. Present only once the public log endpoints are deployed; see docs/receipt-spec-v1.md section 3.2 for what is live."
+    },
+    "verification": {
+      "$ref": "#/$defs/verificationResult",
+      "description": "The result of checking this receipt, as produced by a verifier. NEVER an input to trust: whoever hands you a receipt can write anything here. Recompute it."
+    }
+  },
+
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601. Inside any signed payload, normalized to JavaScript Date.toISOString(): millisecond precision, Z suffix."
+    },
+
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lower-case hex SHA-256."
+    },
+
+    "licenseId": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{8,16}$",
+      "description": "Short, upper-case, URL-safe licence id."
+    },
+
+    "outputId": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]{8,16}$",
+      "description": "Short, upper-case, URL-safe id of a registered output."
+    },
+
+    "assetType": { "enum": ["voice", "face"] },
+
+    "signature": {
+      "type": "object",
+      "title": "Signature block",
+      "description": "Everything needed to check a signature without trusting the signer. Verify with Ed25519 over the UTF-8 bytes of canonical_json, against the SPKI public key for company_key_id. Canonical JSON: object keys sorted bytewise at every level, array order preserved, no whitespace, undefined-valued keys dropped, timestamps as Date.toISOString().",
+      "required": ["algorithm", "company_key_id", "sig_base64"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "const": "Ed25519" },
+        "company_key_id": {
+          "type": "string",
+          "description": "Resolve the key by THIS field, never by 'the current key'. Rotations append ids and never reuse them, so a verifier that hardcodes one key silently fails after a rotation.",
+          "examples": ["idl-signing-v1"]
+        },
+        "sig_base64": { "type": "string", "description": "Base64 Ed25519 signature." },
+        "public_key_spki_b64": {
+          "type": ["string", "null"],
+          "description": "SPKI public key, base64, inline as a convenience. For anything that matters, pin the key out of band rather than trusting the copy inside the response being checked. Null when we publish no key for that id."
+        },
+        "signed_payload": {
+          "type": "object",
+          "description": "The exact object the signature was taken over.",
+          "additionalProperties": true
+        },
+        "canonical_json": {
+          "type": "string",
+          "description": "Canonical bytes of signed_payload. Recompute this yourself and compare; do not sign what you were handed."
+        },
+        "recipe": {
+          "type": "string",
+          "description": "Plain-language instructions for reproducing the canonical bytes."
+        },
+        "self_check_passed": {
+          "type": "boolean",
+          "description": "The issuer's own re-verification. Worthless as evidence, since the issuer is the party being checked. Ignore it and verify."
+        }
+      }
+    },
+
+    "assetFingerprint": {
+      "type": "object",
+      "title": "Versioned identity asset (link 2)",
+      "description": "Re-enrollment mints a new version and never mutates an old one, which is what makes 'which exact voice said this' answerable later.",
+      "required": ["asset_type", "sha256", "version", "created_at"],
+      "additionalProperties": false,
+      "properties": {
+        "asset_type": { "$ref": "#/$defs/assetType" },
+        "sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "Voice: the enrollment sample. Face: the canonical pack manifest."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Monotonic per person per asset type, starting at 1."
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+
+    "personLink": {
+      "type": "object",
+      "title": "Verified person (link 1)",
+      "description": "The consent recording, the government document and the biometric templates are never published. What is published is that a consent record exists and how identity was established. The recording's hash is inside the signed licence payload as consent_video_sha256, so it cannot be swapped after issue even though it is never disclosed.",
+      "required": ["display_name", "consent_on_record"],
+      "additionalProperties": false,
+      "properties": {
+        "display_name": { "type": "string" },
+        "consent_on_record": {
+          "const": true,
+          "description": "A trusted assertion, not a cryptographic proof. A licence record cannot exist without a consent record behind it, but the recording itself is not published for you to check."
+        },
+        "identity_method": {
+          "enum": ["document", "video_attestation"],
+          "description": "How identity was established AT ISSUE. 'document' = a government ID was verified. 'video_attestation' = the person stated their legal name and the date on camera and a named operator confirmed it, with NO government document checked. ABSENT MEANS NO CLAIM IS MADE EITHER WAY (the licence predates the field). Do not render an absent value as either method, and do not treat video_attestation as equivalent to document. Signed, so the strength of the check behind a receipt cannot be quietly revised later."
+        },
+        "consent_video_sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "Present in the licence's signed payload rather than on the public licence response. Included here when the assembling verifier read it out of that payload."
+        }
+      }
+    },
+
+    "licenseLink": {
+      "type": "object",
+      "title": "Licence (link 3)",
+      "description": "The signed registry row. Money is NEVER in the signed payload and never public, so public verification never requires disclosing commercial terms.",
+      "required": [
+        "license_id",
+        "status",
+        "brand_name",
+        "scope",
+        "effective_at",
+        "expires_at",
+        "contract_sha256",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "license_id": { "$ref": "#/$defs/licenseId" },
+        "status": {
+          "enum": ["active", "expired", "revoked", "suspended"],
+          "description": "Status NOW. Separate from whether the licence was in force at the moment of a given use."
+        },
+        "brand_name": { "type": "string" },
+        "agency_name": {
+          "type": ["string", "null"],
+          "description": "The agency that transacted, when there was one. Published because a checker asking 'who used this' needs both parties named, not just the brand on the schedule."
+        },
+        "scope": { "$ref": "#/$defs/scope" },
+        "effective_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" },
+        "contract_sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "Hash of the signed instrument. Both parties signed these exact bytes; a second signature over a different hash is rejected at recording time."
+        },
+        "asset_pack_sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "Present when the licence covers a face pack."
+        },
+        "post_expiry": { "$ref": "#/$defs/postExpiryTerms" },
+        "signature": { "$ref": "#/$defs/signature" }
+      }
+    },
+
+    "scope": {
+      "type": "object",
+      "title": "What the licence permits",
+      "description": "The public half of the deal scope. Immutable once the licence activates.",
+      "required": ["assets", "use_case", "media_channels", "territories"],
+      "additionalProperties": false,
+      "properties": {
+        "assets": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/assetType" }
+        },
+        "use_case": {
+          "enum": [
+            "advertising",
+            "brand_content",
+            "entertainment",
+            "games_interactive",
+            "corporate_internal",
+            "education_training",
+            "virtual_assistant"
+          ],
+          "description": "Exactly one. A second use case is a second licence."
+        },
+        "media_channels": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "paid_social",
+              "organic_social",
+              "tv_ctv",
+              "web",
+              "audio_streaming",
+              "ooh_dooh",
+              "in_app",
+              "print"
+            ]
+          }
+        },
+        "territories": {
+          "description": "'worldwide', or a list of ISO 3166-1 alpha-2 codes. Never both.",
+          "oneOf": [
+            { "const": "worldwide" },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 2, "maxLength": 2 }
+            }
+          ]
+        }
+      }
+    },
+
+    "postExpiryTerms": {
+      "type": "object",
+      "title": "What happens to published content after the term",
+      "description": "Public because 'the term ended' and 'the content must come down' are different facts and a legal reviewer needs to know which applies. Expiry only ever stops FUTURE generation; everything here is contract, negotiated per deal.",
+      "required": [
+        "existing_content",
+        "sell_off_days",
+        "archive_rights",
+        "takedown_response_days",
+        "resale_or_transfer"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "existing_content": { "enum": ["may_remain", "must_be_removed"] },
+        "sell_off_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Grace window for in-flight paid media."
+        },
+        "archive_rights": {
+          "type": "boolean",
+          "description": "Whether the brand may keep internal, non-published archive copies."
+        },
+        "takedown_response_days": { "type": "integer", "minimum": 0 },
+        "resale_or_transfer": { "enum": ["prohibited", "with_consent"] }
+      }
+    },
+
+    "generationLink": {
+      "type": "object",
+      "title": "Generation event (link 4)",
+      "description": "One recorded use. 'metered' means we ran the generation, so capture is total and there is no unmetered path. 'registered' means the brand generated on their own tools and filed the result, so it is brand-reported. The distinction is load-bearing and is why 'captured' is inside the signed credential payload.",
+      "required": ["captured", "output_sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "captured": { "enum": ["metered", "registered"] },
+        "event_ref": {
+          "type": "string",
+          "description": "Metered events: the x-idl-request-ref returned with the audio. This is the value that appears in a later registration's derived_from."
+        },
+        "asset": { "$ref": "#/$defs/assetFingerprint" },
+        "model": {
+          "type": "string",
+          "description": "Generating model. Ours for metered events, brand-reported for registrations."
+        },
+        "input_sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "Hash of the input text or prompt, where we hold it."
+        },
+        "output_sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "Hash of the bytes produced. For a metered event this is what we delivered; for a registration it is what the brand published, and those legitimately differ after editing."
+        },
+        "generated_at": { "$ref": "#/$defs/timestamp" },
+        "registered_at": {
+          "allOf": [{ "$ref": "#/$defs/timestamp" }],
+          "description": "Present only when captured is 'registered'."
+        },
+        "derived_from": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Metered event refs this published file was cut from. The link that distinguishes a legitimate edited cut from a re-clone, which no watermark or speaker embedding can tell apart."
+        },
+        "record_hash": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "This row's link in the per-licence hash chain. NOTE: publicly this establishes continuity only. The leaf preimage includes unpublished fields and Postgres timestamp text rendering, so a public verifier cannot recompute it. See docs/receipt-spec-v1.md section 3.1."
+        },
+        "chain_version": {
+          "type": "integer",
+          "description": "Which record_hash formula produced this row. A verifier MUST select the formula by this column, or historical rows fail once the formula gains a field."
+        }
+      }
+    },
+
+    "credentialLink": {
+      "type": "object",
+      "title": "Content credential (link 5)",
+      "description": "The signed receipt for one file. output_sha256 is the whole point: hash the file you hold and compare.",
+      "required": [
+        "output_id",
+        "license_id",
+        "output_sha256",
+        "captured",
+        "registered_at",
+        "signature",
+        "verify_url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "output_id": { "$ref": "#/$defs/outputId" },
+        "license_id": { "$ref": "#/$defs/licenseId" },
+        "talent_display_name": { "type": "string" },
+        "brand_name": { "type": "string" },
+        "output_sha256": { "$ref": "#/$defs/sha256Hex" },
+        "media_kind": { "enum": ["image", "video", "audio"] },
+        "model": { "type": "string" },
+        "captured": {
+          "const": "registered",
+          "description": "Constant on a registration credential, so a brand-reported record can never be mistaken for one we metered ourselves."
+        },
+        "published_at": {
+          "allOf": [{ "$ref": "#/$defs/timestamp" }],
+          "description": "Brand-stated first publication. Omitted when they stated none."
+        },
+        "registered_at": { "$ref": "#/$defs/timestamp" },
+        "assets_licensed": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/assetFingerprint" },
+          "description": "The full set the licence covers. A licence covering both face and voice cannot be narrowed to one asset from an output hash alone, so the set is carried rather than guessed."
+        },
+        "license_active_at_publication": {
+          "type": "boolean",
+          "description": "Whether the licence was in force at the moment named by license_term_basis. Derivable from the signed term, so stating it discloses nothing new and saves a reviewer the arithmetic. Recompute it."
+        },
+        "license_term_basis": {
+          "enum": ["published_at", "registered_at"],
+          "description": "Which moment the line above was computed against. Named rather than hidden, because falling back to registration time changes what the answer means."
+        },
+        "private_sha256": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "sha256 of the canonical JSON of the private block. Committed by hash so the credential stays publishable, on the same reasoning that keeps money out of the licence payload."
+        },
+        "private_block": {
+          "$ref": "#/$defs/privateBlock",
+          "description": "Present ONLY in the registering party's own copy, never on the public surface. Rehash it and compare to private_sha256."
+        },
+        "register_record_hash": {
+          "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
+          "description": "This registration's link in the per-licence register chain. See the caveat on generationLink.record_hash."
+        },
+        "signature": { "$ref": "#/$defs/signature" },
+        "verify_url": { "type": "string", "format": "uri" }
+      }
+    },
+
+    "privateBlock": {
+      "type": "object",
+      "title": "The withheld half of a registration",
+      "description": "Not published: publishing which channel one specific ad ran in hands competitors a media plan, and publishing a flag would be a public accusation. Committed to by hash instead. Canonicalize exactly as defined in the spec to reproduce private_sha256.",
+      "required": ["flags"],
+      "additionalProperties": false,
+      "properties": {
+        "media_channel": { "type": "string" },
+        "territory": { "type": "string" },
+        "placement": { "type": "string" },
+        "derived_from": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": "string" },
+        "flags": {
+          "type": "array",
+          "items": { "enum": ["late", "outside_scope", "post_expiry", "licence_not_active"] },
+          "description": "How the filing reads against its licence. Recorded and signed over, NEVER used to refuse a registration and never published. A flag is a reading of the record, not the record, and marking is not a determination of breach."
+        }
+      }
+    },
+
+    "logInclusion": {
+      "type": "object",
+      "title": "Transparency-log inclusion",
+      "description": "Proof that a ledger entry is in the log under a signed tree head. Merkle construction per RFC 6962: leaf = sha256(0x00 || entry_hash), node = sha256(0x01 || left || right). A signature over a tree head proves the head came from us; only an external timestamp on that head rules out back-dating.",
+      "required": ["sth", "inclusion"],
+      "additionalProperties": false,
+      "properties": {
+        "sth": {
+          "type": "object",
+          "title": "Signed tree head",
+          "required": ["tree_size", "root_hash", "signed_at", "signature"],
+          "additionalProperties": false,
+          "properties": {
+            "tree_size": {
+              "type": "string",
+              "pattern": "^[0-9]+$",
+              "description": "Decimal STRING, deliberately: JSON numbers are where a canonical encoding stops being canonical across languages."
+            },
+            "root_hash": { "$ref": "#/$defs/sha256Hex" },
+            "signed_at": { "$ref": "#/$defs/timestamp" },
+            "signature": { "$ref": "#/$defs/signature" },
+            "anchor": {
+              "type": "object",
+              "description": "External timestamp of this head, when one exists. A signature proves origin; only this rules out back-dating.",
+              "required": ["method", "anchored_at"],
+              "additionalProperties": true,
+              "properties": {
+                "method": { "enum": ["rfc3161", "opentimestamps"] },
+                "anchored_at": { "$ref": "#/$defs/timestamp" },
+                "receipt_url": { "type": "string", "format": "uri" }
+              }
+            }
+          }
+        },
+        "inclusion": {
+          "type": "object",
+          "title": "Inclusion proof",
+          "required": ["leaf_index", "entry_hash", "audit_path"],
+          "additionalProperties": false,
+          "properties": {
+            "leaf_index": { "type": "string", "pattern": "^[0-9]+$" },
+            "entry_hash": { "$ref": "#/$defs/sha256Hex" },
+            "preimage": {
+              "type": "string",
+              "description": "The exact string the entry hash was taken over. Published so checking an entry is sha256(preimage) and needs no reimplementation of the hashing rules."
+            },
+            "audit_path": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/sha256Hex" },
+              "description": "Sibling hashes from leaf to root, in order."
+            }
+          }
+        }
+      }
+    },
+
+    "verificationResult": {
+      "type": "object",
+      "title": "Verifier output",
+      "description": "What a verifier concluded. Present for archiving a run, never as evidence: whoever hands you a receipt controls this field.",
+      "required": ["verdict", "checks"],
+      "additionalProperties": false,
+      "properties": {
+        "verdict": {
+          "enum": ["pass", "fail", "incomplete"],
+          "description": "'incomplete' when a link could not be checked at all, which is different from a failed check and must never be reported as a pass."
+        },
+        "verified_at": { "$ref": "#/$defs/timestamp" },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["link", "name", "result"],
+            "additionalProperties": false,
+            "properties": {
+              "link": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5,
+                "description": "Which of the five links this check belongs to. 0 means a document-level or transparency-log check that does not belong to a single link."
+              },
+              "name": { "type": "string" },
+              "result": {
+                "enum": ["pass", "fail", "not_checkable"],
+                "description": "'not_checkable' is a first-class outcome: a trusted assertion such as consent-on-record must never be reported as a cryptographic pass."
+              },
+              "detail": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
