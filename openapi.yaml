@@ -320,9 +320,17 @@ paths:
               schema: { $ref: '#/components/schemas/LicenseId' }
             x-idl-request-ref:
               description: |
-                Generation event id (UUID). The public output id for this generation and the
-                value to pass in `derived_from` when registering a published cut.
+                Generation event id (UUID), and the value to pass in `derived_from` when
+                registering a published cut. Not an output id: an output id is minted when a
+                brand declares a file published, and this is minted when we generate.
               schema: { type: string, format: uuid }
+            x-idl-output-sha256:
+              description: |
+                sha256 of exactly these bytes, watermark included. Provided so registering a
+                publication does not start with rehashing a file we already hashed. A published
+                cut is trimmed and re-encoded and will hash differently, by design; register the
+                hash of what you actually publish and cite this generation in `derived_from`.
+              schema: { type: string, pattern: '^[0-9a-f]{64}$' }
             x-idl-watermarked:
               description: |
                 Version of the invisible watermark applied to these bytes. Disclosed on

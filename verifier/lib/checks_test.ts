@@ -12,6 +12,7 @@ import {
   checkEnvelope,
   checkLicenseChain,
   checkLicenseFacts,
+  checkPlatformFee,
   checkLogInclusion,
   checkPerson,
   checkPrivateBlock,
@@ -457,4 +458,52 @@ Deno.test("an empty chain is not_checkable, never a pass", async () => {
   const c = new Checks();
   await checkLicenseChain(c, { rows: [] });
   assertEquals(named(c, "licence chain").result, "not_checkable");
+});
+
+// ---------------------------------------------------------------------------
+// Platform fee. A rate the issuer could revise afterwards is a claim, not a
+// disclosure, so the only interesting cases are the dishonest ones.
+// ---------------------------------------------------------------------------
+
+Deno.test("a platform fee inside the signature passes and states the rate", () => {
+  const body = fresh();
+  body.data.platform_fee_bps = 1500;
+  body.data.signature.signed_payload.platform_fee_bps = 1500;
+  const c = new Checks();
+  checkPlatformFee(c, body.data);
+  assertEquals(named(c, "platform fee").result, "pass");
+  assert(named(c, "platform fee").detail?.includes("15.00 percent"));
+});
+
+Deno.test("a fee shown but not signed FAILS, because the issuer could revise it", () => {
+  const body = fresh();
+  body.data.platform_fee_bps = 1500;
+  delete body.data.signature.signed_payload.platform_fee_bps;
+  const c = new Checks();
+  checkPlatformFee(c, body.data);
+  assertEquals(named(c, "platform fee").result, "fail");
+});
+
+Deno.test("a fee displayed differently from the signed one FAILS", () => {
+  const body = fresh();
+  body.data.platform_fee_bps = 500;
+  body.data.signature.signed_payload.platform_fee_bps = 1500;
+  const c = new Checks();
+  checkPlatformFee(c, body.data);
+  assertEquals(named(c, "platform fee").result, "fail");
+});
+
+Deno.test("no fee recorded is not_checkable, and a signed zero is a real answer", () => {
+  const absent = fresh();
+  const c1 = new Checks();
+  checkPlatformFee(c1, absent.data);
+  assertEquals(named(c1, "platform fee").result, "not_checkable");
+
+  // "we took nothing" and "we did not record it" must not collapse into one answer.
+  const zero = fresh();
+  zero.data.platform_fee_bps = 0;
+  zero.data.signature.signed_payload.platform_fee_bps = 0;
+  const c2 = new Checks();
+  checkPlatformFee(c2, zero.data);
+  assertEquals(named(c2, "platform fee").result, "pass");
 });
