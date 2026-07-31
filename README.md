@@ -59,7 +59,7 @@ link 3: licence
   PASS           licence signature
                  Ed25519 verified against the pinned key
 
-VERDICT: INCOMPLETE. 16 passed, 0 failed, 3 not checkable. Nothing contradicted the
+VERDICT: INCOMPLETE. 16 passed, 0 failed, 4 not checkable. Nothing contradicted the
 receipt, but the lines above marked NOT CHECKABLE are assertions or unavailable data,
 not proofs.
 ```
@@ -82,6 +82,7 @@ why our own showcase licence returns INCOMPLETE rather than a green tick. See
 | [`docs/transparency-log-audit.md`](docs/transparency-log-audit.md) | How to audit the RFC 6962 transparency log, including what is deliberately outside it |
 | [`openapi.yaml`](openapi.yaml) | The API surface, including the public verification endpoints |
 | [`verifier/`](verifier/) | The zero-dependency Deno verifier CLI, with its tampering test suite |
+| [`journal/`](journal/) | Short notes on what has shipped. Every post ends in a command or a URL that returns a real result |
 
 Related public repository:
 [**socialgravity/ledger-anchors**](https://github.com/socialgravity/ledger-anchors), the head
