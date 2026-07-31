@@ -280,6 +280,49 @@ export function checkAssets(c: Checks, license: Json): void {
   );
 }
 
+/**
+ * What the platform took, if the record says. A rate, not an amount: deal pricing is never
+ * published, so this reveals nothing about what the brand paid.
+ *
+ * The only interesting failure is a fee shown but not signed, or shown differently from the way
+ * it was signed. Either means the number a talent reads is one the issuer can change at will,
+ * which makes it a claim rather than a disclosure. Absent is not a failure: licences issued
+ * before 2026-07-31 have no fee recorded, and "not recorded" is a different and honest answer.
+ */
+export function checkPlatformFee(c: Checks, license: Json): void {
+  const shown = license?.platform_fee_bps;
+  const signed = license?.signature?.signed_payload?.platform_fee_bps;
+  if (shown === undefined && signed === undefined) {
+    c.add(3, "platform fee", "not_checkable", "this licence records no platform fee");
+    return;
+  }
+  if (signed === undefined) {
+    c.add(
+      3,
+      "platform fee",
+      "fail",
+      `the response shows ${shown} bps but the signed payload does not carry it, so the issuer could change it at will`,
+    );
+    return;
+  }
+  if (shown !== undefined && shown !== signed) {
+    c.add(
+      3,
+      "platform fee",
+      "fail",
+      `response says ${shown} bps, signature covers ${signed} bps`,
+    );
+    return;
+  }
+  const bps = signed as number;
+  c.add(
+    3,
+    "platform fee",
+    "pass",
+    `${bps} bps (${(bps / 100).toFixed(2)} percent) taken by the platform, inside the signature`,
+  );
+}
+
 /** Link 3, the non-signature half: does the record say what it appears to say. */
 export function checkLicenseFacts(c: Checks, license: Json): void {
   const payload = license?.signature?.signed_payload ?? {};
