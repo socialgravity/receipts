@@ -58,9 +58,11 @@ info:
     url: https://id.socialgravity.ai
   x-contract-version: 1
   x-status: |
-    Live surface as of 2026-07-30. There are no listed talent on the platform yet. One licence
-    covers a real person and a real voice sample (L24SQXLKQFC, first-party: the brand is us); the
-    rest are operator-created demo and synthetic records.
+    Live surface as of 2026-07-31. There is one listed talent on the platform. One licence is a
+    real record covering a real person and a real voice sample (LDNAEEDY5UB, first-party: the
+    brand is us). Every other licence carries an append-only demo mark and reports demo: true when
+    fetched; those are operator-created test and synthetic records and must never be quoted as
+    deals.
 
 servers:
   - url: https://id.socialgravity.ai/functions/v1
@@ -107,9 +109,9 @@ paths:
         - name: id
           in: query
           required: false
-          description: Licence id, for example `L24SQXLKQFC`. Upper-cased server-side.
+          description: Licence id, for example `LDNAEEDY5UB`. Upper-cased server-side.
           schema: { $ref: '#/components/schemas/LicenseId' }
-          example: L24SQXLKQFC
+          example: LDNAEEDY5UB
         - name: output
           in: query
           required: false
@@ -133,12 +135,12 @@ paths:
                           - $ref: '#/components/schemas/VerifyOutputResponse'
               examples:
                 license:
-                  summary: Licence receipt, taken from the live record L24SQXLKQFC
+                  summary: Licence receipt, taken from the live record LDNAEEDY5UB
                   value:
                     ok: true
                     contract_version: 1
                     data:
-                      license_id: L24SQXLKQFC
+                      license_id: LDNAEEDY5UB
                       status: active
                       # A real person and a real voice sample, but the brand is us: this is a
                       # first-party licence issued through the direct operator path, not an
@@ -1091,7 +1093,7 @@ components:
       type: string
       pattern: '^[A-Z0-9]{8,16}$'
       description: Short, upper-case, URL-safe licence id. Case-normalized server-side.
-      example: L24SQXLKQFC
+      example: LDNAEEDY5UB
 
     OutputId:
       type: string

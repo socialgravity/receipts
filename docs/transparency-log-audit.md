@@ -72,7 +72,7 @@ read.
 ## Procedure C: check that a record is in the log
 
 ```
-curl -s "https://id.socialgravity.ai/functions/v1/idl-log-sth?include=L24SQXLKQFC" | jq .data
+curl -s "https://id.socialgravity.ai/functions/v1/idl-log-sth?include=LDNAEEDY5UB" | jq .data
 ```
 
 You get the head, the record's ledger entries with the exact **preimage** each hash was taken
@@ -88,7 +88,7 @@ over, and an audit path.
 Or run the verifier, which does all of it:
 
 ```
-deno run --allow-net verifier/verify.ts --license L24SQXLKQFC
+deno run --allow-net verifier/verify.ts --license LDNAEEDY5UB
 ```
 
 ## What the log does NOT prove

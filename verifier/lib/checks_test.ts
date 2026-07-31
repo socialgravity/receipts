@@ -10,6 +10,7 @@ import {
   Checks,
   checkAssets,
   checkEnvelope,
+  checkLicenseChain,
   checkLicenseFacts,
   checkLogInclusion,
   checkPerson,
@@ -370,4 +371,90 @@ Deno.test("no anchor at all is not_checkable, not a silent pass", async () => {
   const c = new Checks();
   await checkLogInclusion(c, sth, proof);
   assertEquals(named(c, "external anchor").result, "not_checkable");
+});
+
+// ---------------------------------------------------------------------------
+// Per-licence chain recomputation (chain versions 5 and 3)
+// ---------------------------------------------------------------------------
+// The property under test is the one the receipt spec had to disclaim until now: a stranger can
+// rehash these rows. So every test here builds the preimages, hashes them the way the database
+// does, and then breaks something.
+
+async function chainOf(
+  preimages: string[],
+  opts: { recomputable?: boolean[]; kind?: string } = {},
+): Promise<{ rows: Record<string, unknown>[] }> {
+  const rows: Record<string, unknown>[] = [];
+  let prev = "genesis";
+  for (let i = 0; i < preimages.length; i++) {
+    // The preimage always opens with prev_hash, exactly as the SQL builder does.
+    const preimage = `${prev}|${preimages[i]}`;
+    const hash = await sha256Hex(preimage);
+    rows.push({
+      kind: opts.kind ?? "generation",
+      seq: String(i + 1),
+      chain_version: "5",
+      prev_hash: prev,
+      record_hash: hash,
+      preimage,
+      recomputable: opts.recomputable?.[i] ?? true,
+      private_commitment: "ab".repeat(32),
+    });
+    prev = hash;
+  }
+  return { rows };
+}
+
+Deno.test("a published chain that rehashes and links passes", async () => {
+  const chain = await chainOf(["LTEST|one", "LTEST|two", "LTEST|three"]);
+  const c = new Checks();
+  await checkLicenseChain(c, chain);
+  const line = named(c, "licence chain");
+  assertEquals(line.result, "pass");
+  assert((line.detail ?? "").includes("3 row(s) rehashed"));
+});
+
+Deno.test("a preimage edited after the fact fails, because it no longer hashes to the row", async () => {
+  const chain = await chainOf(["LTEST|one", "LTEST|two"]);
+  // The exact forgery this endpoint has to catch: the story is changed, the hash is left alone.
+  (chain.rows[1] as Record<string, unknown>).preimage =
+    String(chain.rows[1].preimage).replace("two", "twz");
+  const c = new Checks();
+  await checkLicenseChain(c, chain);
+  assertEquals(named(c, "licence chain").result, "fail");
+});
+
+Deno.test("a row spliced out of the middle breaks the link and fails", async () => {
+  const chain = await chainOf(["LTEST|one", "LTEST|two", "LTEST|three"]);
+  chain.rows.splice(1, 1);
+  const c = new Checks();
+  await checkLicenseChain(c, chain);
+  const line = named(c, "licence chain");
+  assertEquals(line.result, "fail");
+  assert((line.detail ?? "").includes("prev_hash"));
+});
+
+Deno.test("rows too old to recompute are skipped, not silently counted as verified", async () => {
+  const chain = await chainOf(["LTEST|one", "LTEST|two"], { recomputable: [false, true] });
+  delete (chain.rows[0] as Record<string, unknown>).preimage;
+  // Row 2 still links to row 1's hash, which the check must carry across the gap.
+  const c = new Checks();
+  await checkLicenseChain(c, chain);
+  const line = named(c, "licence chain");
+  assertEquals(line.result, "pass");
+  assert((line.detail ?? "").includes("1 older row(s) not recomputable"));
+});
+
+Deno.test("a chain with nothing recomputable is not_checkable rather than a pass", async () => {
+  const chain = await chainOf(["LTEST|one"], { recomputable: [false] });
+  delete (chain.rows[0] as Record<string, unknown>).preimage;
+  const c = new Checks();
+  await checkLicenseChain(c, chain);
+  assertEquals(named(c, "licence chain").result, "not_checkable");
+});
+
+Deno.test("an empty chain is not_checkable, never a pass", async () => {
+  const c = new Checks();
+  await checkLicenseChain(c, { rows: [] });
+  assertEquals(named(c, "licence chain").result, "not_checkable");
 });

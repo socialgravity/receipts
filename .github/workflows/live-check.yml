@@ -1,0 +1,45 @@
+# Runs the published verifier against a real, live licence every day, in public.
+#
+# Exit codes from verify.ts:
+#   0  every check passed
+#   2  INCOMPLETE: nothing contradicted the receipt, but some checks are assertions
+#      rather than proofs. This is the expected result for a licence whose identity
+#      check is ours to assert, so it is treated as a pass here.
+#   1  FAIL: a check was contradicted. That is a real problem and this job goes red.
+#
+# If this job is red, do not trust the receipt it names until we say why.
+
+name: Live receipt check
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: verify a live licence end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Verify LDNAEEDY5UB
+        run: |
+          set +e
+          deno run --allow-net verifier/verify.ts --license LDNAEEDY5UB
+          code=$?
+          set -e
+          echo "verifier exit code: $code"
+          if [ "$code" -eq 1 ]; then
+            echo "::error::A check was contradicted on a live licence."
+            exit 1
+          fi
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then
+            echo "::error::Verifier could not complete (exit $code)."
+            exit 1
+          fi
+</content>

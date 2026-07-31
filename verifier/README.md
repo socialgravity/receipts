@@ -14,10 +14,10 @@ config. It reads public endpoints and, optionally, files you point it at.
 ## Use
 
 ```
-deno run --allow-net verifier/verify.ts --license L24SQXLKQFC
+deno run --allow-net verifier/verify.ts --license LDNAEEDY5UB
 deno run --allow-net verifier/verify.ts --output  OUT4K2Q9Z
 deno run --allow-net --allow-read verifier/verify.ts --output OUT4K2Q9Z --file ./spot.wav
-deno run --allow-net verifier/verify.ts --license L24SQXLKQFC --json > receipt.json
+deno run --allow-net verifier/verify.ts --license LDNAEEDY5UB --json > receipt.json
 ```
 
 | Flag | What it does |
@@ -105,6 +105,7 @@ is vendored here, deliberately: the verifier's own dependency count is a feature
 ## Publishing
 
 This tool is published in two places: as readable source and a single-file bundle at
-[socialgravity.ai/docs](https://socialgravity.ai/docs), and as this repository. The bundle and
-this source are built from the same files; if they ever disagree, this repository plus the
-platform's private repo history is the record of what changed and when.
+[socialgravity.ai/docs](https://socialgravity.ai/docs), and as the public repository
+[socialgravity/receipts](https://github.com/socialgravity/receipts). The bundle and this source
+are built from the same files; if they ever disagree, this repository plus the platform's
+private repo history is the record of what changed and when.

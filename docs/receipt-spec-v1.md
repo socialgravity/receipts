@@ -201,42 +201,74 @@ equally verifiable, and the difference is not marketing.
 | Was the licence in force at publication | **Yes** | Compare `published_at` against the signed term |
 | Private block matches its commitment | **Yes, for a party holding it** | Recanonicalize and rehash to `private_sha256` |
 | Consent exists | No, trusted assertion | `consent_on_record`. The recording is not published; its hash is signed |
-| Per-licence chain continuity | Partly | See 3.1 |
+| Per-licence chain continuity | **Yes, from chain versions 5 and 3** | Rehash each published preimage, follow `prev_hash`. See 3.1 |
 | Ledger entry integrity | Yes by design, **not yet reachable** | See 3.2 |
 
-### 3.1 The per-licence chains are tamper-evident, not publicly recomputable
+### 3.1 The per-licence chains are publicly recomputable from chain versions 5 and 3
 
 Both `idl_usage_events` and `idl_output_registrations` are hash-chained per licence by database
 trigger: each row's `record_hash` covers the previous row's hash, so editing or deleting an old
 row breaks every hash after it. Rows are append-only, enforced in the database rather than in a
 service.
 
-But a **public** verifier cannot recompute those leaf hashes, for two concrete reasons:
+Until 2026-07-31 this section said those hashes were tamper-evident but **not** publicly
+recomputable, and that was the honest description of two real obstacles:
 
-1. The preimage includes fields we do not publish (`api_key_id` on a metered event,
-   `registered_by` on a registration).
-2. The preimage renders timestamps with Postgres text formatting rather than ISO 8601, which is
-   session-dependent and not part of any published recipe.
+1. The preimage carried fields we cannot publish: the brand's `api_key_id`, and the volume
+   (`characters`, `audio_ms`) which is money by another name. Publishing the preimage would have
+   published them.
+2. Timestamps rendered through the session `TimeZone`, so the preimage depended on the row plus a
+   server setting nobody records.
 
-So what a public checker gets from these chains is **continuity of the hashes we publish**
-(`register_record_hash` links a credential into its licence's register), not an independent
-recomputation of the leaves. A party who receives the raw rows can do the full check. This is
-stated because "hash-chained" is easy to read as "publicly verifiable", and here it is not.
+Both are now closed, in that order of difficulty:
+
+- **Timestamps** render as `to_char(.. at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')` from
+  usage `chain_version` 4 and output `chain_version` 2.
+- **The private fields left the preimage** at usage version 5 and output version 3. They are
+  replaced by one `private_commitment`:
+  `sha256(salt_hex || '|' || the private fields, pipe-separated, empty string for null)`.
+  The salt is 32 random bytes per row and is **never published**. It has to be there: `characters`
+  and `audio_ms` are small integers, so an unsalted commitment over them is brute-forceable in
+  moments and the volume we declined to publish would fall straight out of the hash.
+
+So from those versions on, the whole preimage is published and checking a row is
+`sha256(published_preimage) == record_hash`, with no library, no account and no trust in us:
+
+```
+GET /idl-log-sth?chain=<licenceId>
+```
+
+A party who legitimately holds the private values and the salt (the brand for its own key and
+volume, the talent's representative, an auditor) rehashes the private block and reproduces
+`private_commitment`, which ties those values to that exact row without them ever being public.
+
+**What recomputing a chain does not prove:** that the chain is complete. A row we never wrote
+cannot be caught by rehashing the rows we did write. Completeness is what the transparency log's
+inclusion proofs and the external anchors are for (3.2), and the two checks are separate on
+purpose.
+
+Rows written under earlier versions are returned by that endpoint with their hashes and **no
+preimage**, plus a note saying why. They are still tamper-evident and still chain; they are simply
+not publishable, and no preimage was invented for them. Nothing was back-filled, because a hash
+written today over an earlier date is precisely the back-dating the anchors exist to rule out.
 
 Each chained table carries a `chain_version` column. A verifier must select the formula by that
 column; historical rows will fail against a newer formula once one gains a field.
 
-### 3.2 The unified ledger: designed to be recomputable, not yet reachable
+### 3.2 The unified ledger: recomputable, live, anchored
 
 The unified append-only ledger (`idl_ledger`) is the one designed for public recomputation:
 every entry publishes **its own preimage** alongside its hash, so checking an entry is
-`sha256(published_preimage)` and needs no reimplementation of anything. Chain heads are signed,
-and can carry an RFC 3161 timestamp, which is the only thing that rules out back-dating.
+`sha256(published_preimage)` and needs no reimplementation of anything.
 
-**As of 2026-07-29 this is schema-only in production.** The tables exist and the code is on
-`main`, but the public read endpoints are not deployed and the ledger holds zero rows. Do not
-build against it yet, and do not cite it as live. The chain with real data today is the
-per-licence one behind `idl-verify`.
+**As of 2026-07-30 it is live.** Licences, consent records, outputs, generations and biometric
+template lifecycle events write to it through database triggers; `idl-log-sth` serves the
+signed RFC 6962 tree head, the ordered entry hashes, inclusion proofs (`?include=`) and
+consistency proofs (`?consistency=`). Heads are anchored hourly: signed by the company key,
+countersigned by an independent RFC 3161 timestamp authority, and mirrored to a public
+repository (`github.com/socialgravity/ledger-anchors`) whose default branch refuses force
+pushes. **Anchoring dates nothing before 2026-07-30**; entries that predate the first anchor
+have tamper evidence and inclusion, not third-party proof of when.
 
 ### 3.3 `self_check_passed` proves nothing
 
@@ -321,23 +353,27 @@ Named so nobody integrates against a plan:
 - **Watermark detection as proof.** Watermarks and perceptual fingerprints route a checker back
   to a credential. They are detection aids, not enforcement, and not part of a receipt.
 
-## 8. Honest status, 2026-07-30
+## 8. Honest status, 2026-07-31
 
-There are **zero listed talent** on the platform. One licence on the register covers a real person
-and a real voice sample; the rest are internal test records.
+There is **one listed talent** on the platform. One licence on the register is a real record; every
+other licence carries a demo mark and says so when you fetch it.
 
-The one to check against is `L24SQXLKQFC`, which verifies at
-`https://id.socialgravity.ai/functions/v1/idl-verify?id=L24SQXLKQFC`. What is real about it: the
+The one to check against is `LDNAEEDY5UB`, which verifies at
+`https://id.socialgravity.ai/functions/v1/idl-verify?id=LDNAEEDY5UB`. What is real about it: the
 person is document-verified through Stripe Identity, link 1 is a platform agreement he actually
-signed, and its asset fingerprint is the sha256 of a real confirmed voice sample (enrollment v2),
-not a placeholder. What is not arm's length about it: the brand is SocialGravity, so it is a
-first-party deal, and it was issued through the direct operator path rather than negotiated, which
-the record itself states as `issue_path: direct_operator`. Read it as a working example of the
-mechanism, not as evidence of a market.
+signed and whose exact document is committed by hash inside the signature, and its asset
+fingerprint is the sha256 of a real confirmed voice sample (enrollment v2), not a placeholder.
+What is not arm's length about it: the brand is SocialGravity, so it is a first-party deal, and it
+was issued through the direct operator path rather than negotiated, which the record itself states
+as `issue_path: direct_operator`. Read it as a working example of the mechanism, not as evidence of
+a market.
 
-Its predecessor `LGVGMQAWVE2` remains on the register and still verifies, but its parties are
-placeholder organisations and its asset fingerprint is a placeholder hash rather than the digest
-of a real voice sample. It is retained as the verifier's regression fixture.
+Every earlier licence, including `L24SQXLKQFC` and `LGVGMQAWVE2`, now carries an append-only demo
+mark naming what is wrong with it (a synthetic consent record, a placeholder consent hash, or no
+consent record at all). Those marks cannot be removed: marking real data as demo is a harmless
+mistake, unmarking demo data as real is fraud, so only one direction exists. `LGVGMQAWVE2` is
+retained as the verifier's regression fixture. If a receipt you are shown comes back with
+`demo: true`, it is test data and nobody may quote it as a deal.
 
 Two records also carry fake cryptographic material written directly into the table by test
 harnesses rather than signed: `LSYNTHREG01`, whose signature is the literal string `SYNTHETIC`,

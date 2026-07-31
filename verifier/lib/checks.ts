@@ -540,7 +540,11 @@ export async function checkLogInclusion(c: Checks, sth: Json, proof: Json): Prom
   //   - an anchor taken at ledger seq N says nothing about an entry at seq N+1, which is the
   //     normal state for a freshly issued licence: the anchor lags the entry it would cover.
   // Passing on presence alone told a reader "back-dating is ruled out" when neither held.
-  const anchor = sth?.anchor;
+  // The log now reports every anchor of the newest head under `anchors`, with `anchor` kept as
+  // the strongest for older readers. Prefer finding rfc3161 ourselves rather than trusting the
+  // server's idea of strongest: this verifier's job includes the case where the server is wrong.
+  const reported = Array.isArray(sth?.anchors) ? sth.anchors : [];
+  const anchor = reported.find((a: { method?: string }) => a?.method === "rfc3161") ?? sth?.anchor;
   if (!anchor?.method) {
     c.add(
       0,
@@ -578,6 +582,87 @@ export async function checkLogInclusion(c: Checks, sth: Json, proof: Json): Prom
         `and so this entry at seq ${proof?.seq}, which is what rules out back-dating`,
     );
   }
+}
+
+/**
+ * The per-licence chain, recomputed rather than believed.
+ *
+ * Until chain versions 5 and 3 this check could not exist: the preimages held the brand's key
+ * and the volume, so the only public statement available was "trust us, the hashes link". Now
+ * every recomputable row publishes the exact string its hash was taken over, and this walks them
+ * hashing each one and following prev_hash. A row that fails is a row whose published preimage
+ * does not produce its published hash, which is the accusation this surface exists to answer.
+ *
+ * What a pass does NOT mean: that the chain is complete. A log that never wrote a row cannot be
+ * caught by a check on the rows it did write, which is what the transparency log's inclusion
+ * proofs and the anchors are for. Stated here because "the chain verified" is easy to over-read.
+ */
+export async function checkLicenseChain(c: Checks, chain: Json): Promise<void> {
+  const rows = (chain?.rows ?? []) as Json[];
+  if (!rows.length) {
+    c.add(4, "licence chain", "not_checkable", "this licence has no metered or registered rows yet");
+    return;
+  }
+
+  const byKind = new Map<string, Json[]>();
+  for (const r of rows) {
+    const k = String(r.kind ?? "unknown");
+    if (!byKind.has(k)) byKind.set(k, []);
+    byKind.get(k)!.push(r);
+  }
+
+  let recomputed = 0;
+  let skipped = 0;
+  for (const [kind, kindRows] of byKind) {
+    let expectedPrev = "genesis";
+    for (const r of kindRows) {
+      if (!r.recomputable || typeof r.preimage !== "string") {
+        skipped++;
+        // The link still has to hold across a row we cannot recompute, so carry its hash
+        // forward: an unpublishable preimage is not permission to lose the thread.
+        expectedPrev = typeof r.record_hash === "string" ? r.record_hash : expectedPrev;
+        continue;
+      }
+      const got = await sha256Hex(r.preimage);
+      if (got !== r.record_hash) {
+        c.add(
+          4,
+          "licence chain",
+          "fail",
+          `${kind} row ${r.seq}: sha256 of the published preimage is ${got}, the row claims ${r.record_hash}`,
+        );
+        return;
+      }
+      if (r.prev_hash !== expectedPrev) {
+        c.add(
+          4,
+          "licence chain",
+          "fail",
+          `${kind} row ${r.seq}: prev_hash is ${r.prev_hash}, but the row before it hashes to ${expectedPrev}`,
+        );
+        return;
+      }
+      expectedPrev = String(r.record_hash);
+      recomputed++;
+    }
+  }
+
+  if (!recomputed) {
+    c.add(
+      4,
+      "licence chain",
+      "not_checkable",
+      `${skipped} row(s) predate the recomputable formulas, so none of this chain can be rehashed`,
+    );
+    return;
+  }
+  c.add(
+    4,
+    "licence chain",
+    "pass",
+    `${recomputed} row(s) rehashed from their published preimages and linked` +
+      (skipped ? `; ${skipped} older row(s) not recomputable and skipped` : ""),
+  );
 }
 
 function hexBytes(hex: string): Uint8Array {

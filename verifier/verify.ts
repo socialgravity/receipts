@@ -1,10 +1,10 @@
 #!/usr/bin/env -S deno run --allow-net
 // SocialGravity receipt verifier. Fetches public data, verifies LOCALLY.
 //
-//   deno run --allow-net verifier/verify.ts --license L24SQXLKQFC
+//   deno run --allow-net verifier/verify.ts --license LDNAEEDY5UB
 //   deno run --allow-net verifier/verify.ts --output  OUT4K2Q9Z
 //   deno run --allow-net --allow-read verifier/verify.ts --output OUT4K2Q9Z --file ./spot.wav
-//   deno run --allow-net verifier/verify.ts --license L24SQXLKQFC --json > receipt.json
+//   deno run --allow-net verifier/verify.ts --license LDNAEEDY5UB --json > receipt.json
 //
 // The only thing this takes from the network is data. Every signature check, every hash and
 // every piece of arithmetic happens here, against a public key pinned in verifier/lib/keys.ts
@@ -24,13 +24,16 @@ import {
   checkCredential,
   checkEnvelope,
   checkLicenseFacts,
+  checkLicenseChain,
   checkLogInclusion,
   checkPerson,
   checkPrivateBlock,
   checkSignature,
 } from "./lib/checks.ts";
+import { hexToBytes, verifyConsistency } from "./lib/merkle.ts";
 
 const DEFAULT_BASE = "https://id.socialgravity.ai/functions/v1";
+const DEFAULT_MIRROR = "https://raw.githubusercontent.com/socialgravity/ledger-anchors/main";
 
 interface Args {
   license?: string;
@@ -38,13 +41,14 @@ interface Args {
   file?: string;
   privateBlock?: string;
   base: string;
+  mirror: string;
   json: boolean;
   quiet: boolean;
   noLog: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { base: DEFAULT_BASE, json: false, quiet: false, noLog: false };
+  const a: Args = { base: DEFAULT_BASE, mirror: DEFAULT_MIRROR, json: false, quiet: false, noLog: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const next = () => {
@@ -61,6 +65,7 @@ function parseArgs(argv: string[]): Args {
       case "--json": a.json = true; break;
       case "--quiet": case "-q": a.quiet = true; break;
       case "--no-log": a.noLog = true; break;
+      case "--mirror": a.mirror = next(); break;
       case "--help": case "-h": usage(); Deno.exit(0); break;
       default: die(3, `unknown argument ${k}`);
     }
@@ -79,6 +84,8 @@ Verify a SocialGravity identity licensing receipt locally.
   --private-block <path> a private block JSON you hold, rehashed against its commitment
   --base <url>           API base (default ${DEFAULT_BASE})
   --no-log               skip the transparency-log lookup
+  --mirror <url>         base URL of the public anchor mirror used for the witnessed-head
+                         consistency check. Defaults to the socialgravity/ledger-anchors repo
   --json                 print the receipt document (docs/schemas/receipt-v1.schema.json)
   --quiet, -q            print only the verdict line
 
@@ -244,6 +251,115 @@ if (!args.noLog) {
           logData.sth?.tree_size ?? "?"
         }); expected for records created before the log began, and not evidence against them`,
       );
+    }
+  }
+
+  // Link 4 recomputed rather than asserted. The per-licence chain is a separate structure from
+  // the Merkle log: inclusion proves the log holds this record, the chain proves the licence's
+  // own generation and registration history has not been edited. Fetched from the same endpoint
+  // and, like the log itself, reported as not-checkable when it is not there.
+  {
+    const licenceForChain = licenseData?.license?.license_id ?? args.license;
+    if (licenceForChain) {
+      try {
+        const res = await fetch(`${sthUrl}?chain=${encodeURIComponent(licenceForChain)}`, {
+          headers: { accept: "application/json" },
+        });
+        if (res.ok) {
+          const body = await res.json();
+          if (body?.ok === true) await checkLicenseChain(checks, body.data);
+        } else {
+          checks.add(4, "licence chain", "not_checkable", `chain endpoint answered HTTP ${res.status}`);
+        }
+      } catch {
+        checks.add(4, "licence chain", "not_checkable", "chain endpoint unreachable");
+      }
+    }
+  }
+
+  // Anti-rewrite: prove today's tree is an append-only extension of a head witnessed OUTSIDE
+  // this infrastructure. The mirror repo is public and its default branch refuses force pushes,
+  // so a head that reached it is out of the operator's hands. The mirrored root, never the
+  // server's restatement of it, is the first root in the proof; a failure here means the log was
+  // rewritten behind a head that is already public, which is the one thing this whole
+  // construction exists to make impossible to hide.
+  if (logData?.sth?.root_hash) {
+    const current = logData.sth;
+    let witnessed: { tree_size?: string; root_hash?: string } | null = null;
+    try {
+      const latest = await fetch(`${args.mirror}/latest.json`);
+      if (latest.ok) {
+        const pointer = await latest.json();
+        if (pointer?.path) {
+          const headFile = await fetch(`${args.mirror}/${pointer.path}`);
+          if (headFile.ok) witnessed = await headFile.json();
+        }
+      }
+    } catch { /* reported as not_checkable below */ }
+
+    if (!witnessed?.tree_size || !witnessed?.root_hash) {
+      checks.add(
+        0,
+        "witnessed head",
+        "not_checkable",
+        "no publicly mirrored head could be fetched, so append-only history rests on the log alone",
+      );
+    } else {
+      const m = Number(witnessed.tree_size);
+      const n = Number(current.tree_size);
+      if (!Number.isInteger(m) || !Number.isInteger(n)) {
+        checks.add(0, "witnessed head", "not_checkable", "a tree size was not a whole number");
+      } else if (m > n) {
+        checks.add(
+          0,
+          "witnessed head",
+          "fail",
+          `the public mirror witnessed a tree of ${m} but the live log claims only ${n}; ` +
+            "a log can only grow, so entries witnessed publicly have been removed",
+        );
+      } else if (m === n) {
+        const same = witnessed.root_hash === current.root_hash;
+        checks.add(
+          0,
+          "witnessed head",
+          same ? "pass" : "fail",
+          same
+            ? `the live tree equals the publicly witnessed head (size ${m}) byte for byte`
+            : `the live root differs from the publicly witnessed root at the same size ${m}; ` +
+              "history has been rewritten",
+        );
+      } else {
+        try {
+          const res = await fetch(`${sthUrl}?consistency=${m}`, {
+            headers: { accept: "application/json" },
+          });
+          const body = res.ok ? await res.json() : null;
+          const proof = body?.ok === true ? body.data?.proof : null;
+          if (!Array.isArray(proof)) {
+            checks.add(0, "witnessed head", "not_checkable", "the log served no consistency proof");
+          } else {
+            const consistent = await verifyConsistency(
+              m,
+              n,
+              proof.map((h: string) => hexToBytes(h)),
+              hexToBytes(witnessed.root_hash),
+              hexToBytes(current.root_hash),
+            );
+            checks.add(
+              0,
+              "witnessed head",
+              consistent ? "pass" : "fail",
+              consistent
+                ? `today's tree of ${n} is a pure append of the publicly witnessed head of ${m}: ` +
+                  "nothing witnessed has been altered or removed"
+                : `the consistency proof from the witnessed head of ${m} to today's ${n} FAILED: ` +
+                  "the log was rewritten behind a head that is already public",
+            );
+          }
+        } catch {
+          checks.add(0, "witnessed head", "not_checkable", "the consistency endpoint was unreachable");
+        }
+      }
     }
   }
 }
