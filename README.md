@@ -43,23 +43,24 @@ base: https://id.socialgravity.ai/functions/v1
 
 document and log
   PASS           external anchor
-                 head timestamped by rfc3161 at 2026-07-31T07:07:01+00:00, covering
-                 ledger seq 51 and so this entry at seq 45, which is what rules out
+                 head timestamped by rfc3161 at 2026-07-31T20:07:02+00:00, covering
+                 ledger seq 59 and so this entry at seq 45, which is what rules out
                  back-dating
   PASS           witnessed head
-                 today's tree of 56 is a pure append of the publicly witnessed head of
-                 30: nothing witnessed has been altered or removed
+                 today's tree of 60 is a pure append of the publicly witnessed head of
+                 59: nothing witnessed has been altered or removed
 
 link 1: person
   NOT CHECKABLE  identity method
                  'document': a government ID was verified. Signed, but the check itself
-                 is the issuer's
+                 is the issuer's. NO LIVENESS: a document check establishes that a valid
+                 ID exists, never that the person holding it was present
 
-link 3: licence
-  PASS           licence signature
-                 Ed25519 verified against the pinned key
+link 4: generation event
+  PASS           licence chain
+                 1 row(s) rehashed from their published preimages and linked
 
-VERDICT: INCOMPLETE. 16 passed, 0 failed, 4 not checkable. Nothing contradicted the
+VERDICT: INCOMPLETE. 17 passed, 0 failed, 3 not checkable. Nothing contradicted the
 receipt, but the lines above marked NOT CHECKABLE are assertions or unavailable data,
 not proofs.
 ```
