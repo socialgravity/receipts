@@ -163,13 +163,21 @@ export function checkPerson(c: Checks, license: Json): void {
       "absent, so NO CLAIM is made either way; this licence predates the field. Do not read it as either method",
     );
   } else if (method === "document") {
-    c.add(1, "identity method", "not_checkable", "'document': a government ID was verified. Signed, but the check itself is the issuer's");
+    c.add(
+      1,
+      "identity method",
+      "not_checkable",
+      "'document': a government ID was verified. Signed, but the check itself is the issuer's. " +
+        "NO LIVENESS: a document check establishes that a valid ID exists, never that the person " +
+        "holding it was present. Do not read this as proof a human took part",
+    );
   } else if (method === "video_attestation") {
     c.add(
       1,
       "identity method",
       "not_checkable",
-      "'video_attestation': a named operator confirmed a spoken statement. NO government document was checked",
+      "'video_attestation': a named operator confirmed a spoken statement. NO government document " +
+        "was checked, and a human watching a recording is not a vendor liveness check",
     );
   } else {
     c.add(1, "identity method", "fail", `unknown identity_method "${method}"`);

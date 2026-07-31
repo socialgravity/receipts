@@ -88,6 +88,16 @@ render `video_attestation` as equivalent to `document`. A receipt that hid the d
 worth less than no receipt, which is why the field is signed: we cannot quietly revise the strength
 of a check behind an already-issued licence.
 
+**Neither value establishes liveness, and no receipt on this register asserts it.** Stated plainly
+because it is the assumption a reader is most likely to make unprompted. A document check proves a
+valid ID exists and that a provider matched its details; it does not prove the person holding it
+was present, and the identity provider on this path runs with the selfie comparison switched off,
+so nothing in the pipeline observes a live human. `video_attestation` is a named human watching a
+recording, which is evidence of a kind but is not a vendor liveness check and is not recorded as
+one. There is no `liveness` field in the payload, and its absence is the honest answer rather than
+an omission: we would rather a reader knows the gap than infers a guarantee. If that changes, it
+changes as a new signed field, never as a reinterpretation of these two values.
+
 ### 1.2 Link 2: asset version
 
 An `AssetFingerprint` is `{asset_type, sha256, version, created_at}`. Re-enrollment mints a new
