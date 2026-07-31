@@ -25,6 +25,7 @@ import {
   checkEnvelope,
   checkLicenseFacts,
   checkLicenseChain,
+  checkPlatformFee,
   checkLogInclusion,
   checkPerson,
   checkPrivateBlock,
@@ -159,6 +160,7 @@ if (licenseData) {
   checkPerson(checks, licenseData);
   checkAssets(checks, licenseData);
   checkLicenseFacts(checks, licenseData);
+  checkPlatformFee(checks, licenseData);
 } else {
   checks.add(3, "licence", "fail", "the licence behind this receipt could not be read");
 }

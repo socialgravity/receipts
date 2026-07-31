@@ -88,6 +88,16 @@ render `video_attestation` as equivalent to `document`. A receipt that hid the d
 worth less than no receipt, which is why the field is signed: we cannot quietly revise the strength
 of a check behind an already-issued licence.
 
+**Neither value establishes liveness, and no receipt on this register asserts it.** Stated plainly
+because it is the assumption a reader is most likely to make unprompted. A document check proves a
+valid ID exists and that a provider matched its details; it does not prove the person holding it
+was present, and the identity provider on this path runs with the selfie comparison switched off,
+so nothing in the pipeline observes a live human. `video_attestation` is a named human watching a
+recording, which is evidence of a kind but is not a vendor liveness check and is not recorded as
+one. There is no `liveness` field in the payload, and its absence is the honest answer rather than
+an omission: we would rather a reader knows the gap than infers a guarantee. If that changes, it
+changes as a new signed field, never as a reinterpretation of these two values.
+
 ### 1.2 Link 2: asset version
 
 An `AssetFingerprint` is `{asset_type, sha256, version, created_at}`. Re-enrollment mints a new
@@ -110,16 +120,30 @@ The signed registry row, the root of everything downstream. Public at
 ```
 {license_id, listing_id, brand_org_id, scope, contract_sha256, asset_pack_sha256?,
  assets_licensed?, identity_method?, effective_at, expires_at,
- consent_video_sha256?, consent_evidence?}
+ consent_video_sha256?, consent_evidence?, platform_fee_bps?}
 ```
 
 Exactly one of `consent_video_sha256` and `consent_evidence` is always present, and a licence
 backed by a recording carries both. Licences issued before 2026-07-30 carry only the first; the
 field is omitted, never nulled, so those signatures keep verifying against identical bytes.
 
-**Never in the payload and never public: money.** Pricing sits outside the signature on
-purpose, so public verification never requires disclosing commercial terms. This is the same
-reasoning that keeps the per-output private block out of the clear (2.2).
+**Never in the payload and never public: amounts.** What a brand paid and what a talent earned
+sit outside the signature on purpose, so public verification never requires disclosing
+commercial terms. This is the same reasoning that keeps the per-output private block out of the
+clear (2.2).
+
+**One rate is public, added 2026-07-31: `platform_fee_bps`.** What the platform took, in basis
+points, snapshotted at issue and inside the signature. 1500 is 15 percent. A rate is not an
+amount: it reveals nothing about what the brand paid, and the person whose identity was licensed
+has the strongest possible claim to knowing what was taken out of their own deal. It is signed
+rather than merely displayed, because a number the issuer can revise afterwards is a claim and
+not a disclosure.
+
+Basis points rather than a decimal, because percentages of money in floating point is how
+rounding disputes start. Omitted, never nulled, on licences issued before 2026-07-31, so those
+signatures keep verifying against identical bytes. A genuine `0` is emitted: "we took nothing"
+and "we did not record what we took" are different answers and a verifier must be able to tell
+them apart.
 
 Also public, and deliberately: `post_expiry`. "The term ended" and "the content must come
 down" are different facts, and a reviewer looking at an expired licence needs to know which one

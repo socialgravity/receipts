@@ -163,13 +163,21 @@ export function checkPerson(c: Checks, license: Json): void {
       "absent, so NO CLAIM is made either way; this licence predates the field. Do not read it as either method",
     );
   } else if (method === "document") {
-    c.add(1, "identity method", "not_checkable", "'document': a government ID was verified. Signed, but the check itself is the issuer's");
+    c.add(
+      1,
+      "identity method",
+      "not_checkable",
+      "'document': a government ID was verified. Signed, but the check itself is the issuer's. " +
+        "NO LIVENESS: a document check establishes that a valid ID exists, never that the person " +
+        "holding it was present. Do not read this as proof a human took part",
+    );
   } else if (method === "video_attestation") {
     c.add(
       1,
       "identity method",
       "not_checkable",
-      "'video_attestation': a named operator confirmed a spoken statement. NO government document was checked",
+      "'video_attestation': a named operator confirmed a spoken statement. NO government document " +
+        "was checked, and a human watching a recording is not a vendor liveness check",
     );
   } else {
     c.add(1, "identity method", "fail", `unknown identity_method "${method}"`);
@@ -277,6 +285,49 @@ export function checkAssets(c: Checks, license: Json): void {
     `${assets.length} signed fingerprint(s): ${
       assets.map((a: Json) => `${a.asset_type} v${a.version}`).join(", ")
     }`,
+  );
+}
+
+/**
+ * What the platform took, if the record says. A rate, not an amount: deal pricing is never
+ * published, so this reveals nothing about what the brand paid.
+ *
+ * The only interesting failure is a fee shown but not signed, or shown differently from the way
+ * it was signed. Either means the number a talent reads is one the issuer can change at will,
+ * which makes it a claim rather than a disclosure. Absent is not a failure: licences issued
+ * before 2026-07-31 have no fee recorded, and "not recorded" is a different and honest answer.
+ */
+export function checkPlatformFee(c: Checks, license: Json): void {
+  const shown = license?.platform_fee_bps;
+  const signed = license?.signature?.signed_payload?.platform_fee_bps;
+  if (shown === undefined && signed === undefined) {
+    c.add(3, "platform fee", "not_checkable", "this licence records no platform fee");
+    return;
+  }
+  if (signed === undefined) {
+    c.add(
+      3,
+      "platform fee",
+      "fail",
+      `the response shows ${shown} bps but the signed payload does not carry it, so the issuer could change it at will`,
+    );
+    return;
+  }
+  if (shown !== undefined && shown !== signed) {
+    c.add(
+      3,
+      "platform fee",
+      "fail",
+      `response says ${shown} bps, signature covers ${signed} bps`,
+    );
+    return;
+  }
+  const bps = signed as number;
+  c.add(
+    3,
+    "platform fee",
+    "pass",
+    `${bps} bps (${(bps / 100).toFixed(2)} percent) taken by the platform, inside the signature`,
   );
 }
 
