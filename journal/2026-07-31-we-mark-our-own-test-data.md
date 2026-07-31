@@ -6,10 +6,10 @@ A register is easy to fake while it is small. Seed it with impressive-looking ro
 properly, and every cryptographic check passes, because the checks were never about whether the
 deal happened. The signature is real. The deal is not.
 
-We are small, and most of our register is test data. At the time of writing it holds exactly one
-real licence, `LZA3ZV5CUYV`, and that one is SocialGravity licensing its own founder's voice, so
-it is real without being arm's length. Saying that plainly costs us nothing we should want to
-keep.
+We are small, and most of our register is test data. The real licences on it today are
+SocialGravity licensing its own founder, so they are real without being arm's length, and
+[section 8 of the spec](../docs/receipt-spec-v1.md) says which records are which. Saying that
+plainly costs us nothing we should want to keep.
 
 So the interesting question is not whether we have test rows. It is whether you can tell.
 
