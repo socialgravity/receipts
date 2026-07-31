@@ -44,9 +44,11 @@ hand you proof it happened, because the check was performed by somebody else and
 their answer. Rendering that as a green tick would be the single cheapest lie available to us and
 it is exactly the lie this field exists to refuse.
 
-**FAIL on consent on record** is a live failing check on our own headline example. It is
-explained in the next post. It stays failing rather than being hidden, because a verifier that
-only ever prints PASS is decoration.
+**FAIL on consent on record** is a live failing check, on a demo licence, printed rather than
+hidden, because a verifier that only ever prints PASS is decoration. It is explained in the next
+post. On the real licence `LZA3ZV5CUYV` that same line reads NOT CHECKABLE instead, which is the
+correct answer: the consent is asserted by the issuer and its hash is inside the signed payload,
+so it cannot be swapped after issue, but you are still taking our word that it happened.
 
 The API says the same thing in its own words. Ask it directly:
 
