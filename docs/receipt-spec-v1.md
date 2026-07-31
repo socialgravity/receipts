@@ -224,7 +224,7 @@ equally verifiable, and the difference is not marketing.
 | Is this file the original | **Yes, fully offline** | sha256 the file, compare to `output_sha256` |
 | Was the licence in force at publication | **Yes** | Compare `published_at` against the signed term |
 | Private block matches its commitment | **Yes, for a party holding it** | Recanonicalize and rehash to `private_sha256` |
-| Consent exists | No, trusted assertion | `consent_on_record`. The recording is not published; its hash is signed |
+| Consent exists | No, trusted assertion | `consent_on_record`, which is computed as `!demo`. Consent is a signed agreement plus a verified ID, never a recording. The agreement hash is the checkable part, and it is signed |
 | Per-licence chain continuity | **Yes, from chain versions 5 and 3** | Rehash each published preimage, follow `prev_hash`. See 3.1 |
 | Ledger entry integrity | Yes by design, **not yet reachable** | See 3.2 |
 

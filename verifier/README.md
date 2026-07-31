@@ -43,7 +43,7 @@ NOT CHECKABLE  cannot be checked from public data at all
 ```
 
 The third one is the reason to trust the other two. "Consent is on record" is an assertion by the
-party under examination; the recording is not published, so no amount of arithmetic here can
+party under examination; the signed agreement itself is not published, so no amount of arithmetic here can
 confirm it. Reporting that as a green tick would put our word inside a result that is meant to
 contain only mathematics. So it is reported as NOT CHECKABLE, and a run with no failures and any
 unchecked line comes back INCOMPLETE, not PASS.

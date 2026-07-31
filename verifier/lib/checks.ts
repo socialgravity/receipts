@@ -150,7 +150,7 @@ export function checkPerson(c: Checks, license: Json): void {
     "consent on record",
     license?.consent_on_record === true ? "not_checkable" : "fail",
     license?.consent_on_record === true
-      ? "asserted by the issuer; the recording is not published, but its hash is inside the signed payload so it cannot be swapped after issue"
+      ? "asserted by the issuer: consent evidence exists and this is not a demo record. Consent here is a signed agreement plus a verified ID, never a recording; the agreement's hash is committed inside the signature and is checked separately below"
       : "the record does not assert a consent record",
   );
 

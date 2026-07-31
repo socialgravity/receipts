@@ -142,7 +142,7 @@
         "display_name": { "type": "string" },
         "consent_on_record": {
           "const": true,
-          "description": "A trusted assertion, not a cryptographic proof. A licence record cannot exist without a consent record behind it, but the recording itself is not published for you to check."
+          "description": "A trusted assertion, not a cryptographic proof. Computed as !demo: true on real records, false on demo and synthetic ones. Consent on this platform is a signed agreement plus a verified ID, never a recording; the agreement sha256 is what is signed and checkable."
         },
         "identity_method": {
           "enum": ["document", "video_attestation"],
