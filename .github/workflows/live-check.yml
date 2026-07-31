@@ -42,4 +42,3 @@ jobs:
             echo "::error::Verifier could not complete (exit $code)."
             exit 1
           fi
-</content>

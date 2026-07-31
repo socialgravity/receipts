@@ -138,4 +138,3 @@ flow back in the next sync. See
 
 - Code (`verifier/`): [Apache License 2.0](LICENSE)
 - Documentation and specifications (`docs/`, `openapi.yaml`): [CC BY 4.0](LICENSE-DOCS)
-</content>
