@@ -336,6 +336,18 @@ paths:
                 Version of the invisible watermark applied to these bytes. Disclosed on
                 purpose: a deterrent nobody is told about does not deter.
               schema: { type: string }
+            x-idl-ai-generated:
+              description: |
+                Always `true` on this endpoint. The flag to branch on: these bytes are a
+                synthetic voice of a real person, not a recording of one.
+              schema: { type: string, enum: [ 'true' ] }
+            x-idl-ai-disclosure:
+              description: |
+                The disclosure in words, safe to surface to a human as-is. EU AI Act Article 50
+                puts disclosure to end users on you as deployer, not on us; this header is how
+                you are told what there is to disclose, so the obligation does not arrive
+                without the fact behind it.
+              schema: { type: string }
           content:
             audio/wav:
               schema: { type: string, format: binary }
@@ -1170,6 +1182,49 @@ components:
           items: { type: string, minLength: 2, maxLength: 2 }
           minItems: 1
 
+    Grant:
+      description: |
+        One licensed use inside a deal: what varies between the TV spot, the social cutdowns
+        and the in-store audio. What is true of the whole deal (assets, exclusivity, declared
+        categories, post-expiry terms) stays on the scope, because the talent agreed those
+        once and they cannot differ per line item.
+      type: object
+      required: [use_case, media_channels, territories, starts_at, ends_at]
+      additionalProperties: false
+      properties:
+        use_case: { $ref: '#/components/schemas/UseCase' }
+        media_channels:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/MediaChannel' }
+        territories: { $ref: '#/components/schemas/Territory' }
+        starts_at: { type: string, description: ISO 8601 date-time. }
+        ends_at: { type: string, description: ISO 8601 date-time, exclusive. }
+        flights:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Flight' }
+        formats:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/MediaFormat' }
+        languages:
+          type: array
+          minItems: 1
+          items: { type: string }
+        generation_mode: { $ref: '#/components/schemas/GenerationMode' }
+
+    Flight:
+      description: |
+        One contiguous period inside a term during which generation is allowed. `to` is
+        exclusive, matching how `expires_at` is compared everywhere else.
+      type: object
+      required: [from, to]
+      additionalProperties: false
+      properties:
+        from: { type: string, description: ISO 8601 date-time. }
+        to: { type: string, description: ISO 8601 date-time, exclusive. }
+
     Exclusivity:
       oneOf:
         - type: object
@@ -1221,7 +1276,7 @@ components:
         first licences were signed; resolve the mode with `resolveGenerationMode(scope)` and
         never read the field directly.
       required:
-        [assets, use_case, media_channels, territories, term_months, starts_at, exclusivity,
+        [assets, use_case, media_channels, territories, starts_at, exclusivity,
          campaign_description]
       properties:
         assets:
@@ -1237,9 +1292,40 @@ components:
         territories: { $ref: '#/components/schemas/Territory' }
         term_months:
           type: integer
-          const: 12
-          description: Face is always 12. Voice is a 12-month master, metered monthly.
+          minimum: 1
+          description: |
+            Legacy term length, kept because licences signed before flexible windows carry it
+            inside their signature. Set `ends_at` instead. A scope must have at least one of
+            the two. Resolve a term with `resolveTermWindow(scope)`, never by reading this.
         starts_at: { type: string, description: ISO 8601 date. }
+        ends_at:
+          type: string
+          description: |
+            End of the term, exclusive. The field to set. Optional on the wire only so that
+            pre-flexible-term scopes, and counter-offers echoing them, stay valid.
+        flights:
+          type: array
+          minItems: 1
+          description: |
+            Generation windows inside the term, for a campaign that runs in bursts. Absent
+            means the whole term is open. Flights only ever narrow the term: they must sit
+            inside `starts_at`..`ends_at`, must not overlap, and are enforced per generation.
+          items: { $ref: '#/components/schemas/Flight' }
+        grants:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: |
+            Additional licensed uses beyond the one described by the fields above, so one deal
+            is one licence, one signature and one receipt. The scope's own use_case /
+            media_channels / territories / window ARE the first grant; resolve the full list
+            with `resolveGrants(scope)` and never iterate this field directly.
+
+            A generation is authorised if ONE grant covers the channel, the territory and the
+            moment together. Every grant is checked against the talent's standing terms
+            independently, and the licence term is measured across the whole envelope, so
+            adding a grant can only ever be refused.
+          items: { $ref: '#/components/schemas/Grant' }
         exclusivity: { $ref: '#/components/schemas/Exclusivity' }
         campaign_description:
           type: string
