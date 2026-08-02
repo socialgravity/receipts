@@ -315,7 +315,7 @@
         },
         "record_hash": {
           "allOf": [{ "$ref": "#/$defs/sha256Hex" }],
-          "description": "This row's link in the per-licence hash chain. NOTE: publicly this establishes continuity only. The leaf preimage includes unpublished fields and Postgres timestamp text rendering, so a public verifier cannot recompute it. See docs/receipt-spec-v1.md section 3.1."
+          "description": "This row's link in the per-licence hash chain. From chain version 3 (registrations) and 5 (usage) the exact preimage is published by /idl-log-sth?chain= and sha256(preimage) reproduces this value; rows under earlier versions establish continuity only, since their preimages carried unpublished fields. See docs/receipt-spec-v1.md section 3.1."
         },
         "chain_version": {
           "type": "integer",

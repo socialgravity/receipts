@@ -254,6 +254,10 @@ Both are now closed, in that order of difficulty:
   The salt is 32 random bytes per row and is **never published**. It has to be there: `characters`
   and `audio_ms` are small integers, so an unsalted commitment over them is brute-forceable in
   moments and the volume we declined to publish would fall straight out of the hash.
+- **The declared use case joined the preimage** at usage version 6 (2026-08-02): which licensed
+  use authorised the generation, appended in the clear by the same rule as the declared channel
+  and territory, since it is already public on the licence's verify surface as scope. Version 5
+  rows keep exactly the preimage they published; the formula is selected by `chain_version`.
 
 So from those versions on, the whole preimage is published and checking a row is
 `sha256(published_preimage) == record_hash`, with no library, no account and no trust in us:
